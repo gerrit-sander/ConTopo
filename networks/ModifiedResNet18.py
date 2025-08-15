@@ -31,7 +31,7 @@ class ResNet18(nn.Module):
     Basic ResNet18 encoder architecture. To have a quadratic number as output dimension for the
     topographic constraint, the number of channels is reduced from 512 to 256 in the last layer.
     """
-    def __init__(self, in_channels=3):
+    def __init__(self, in_channels=3, output_dim=256):
         super(ResNet18, self).__init__()
 
         self.conv1 = nn.Conv2d(in_channels, 64, kernel_size=3, stride=1, padding=1, bias=False)
@@ -40,7 +40,7 @@ class ResNet18(nn.Module):
         self.layer1 = nn.Sequential(Block(64, 64, stride=1), Block(64, 64, stride=1))
         self.layer2 = nn.Sequential(Block(64, 128, stride=2), Block(128, 128, stride=1))
         self.layer3 = nn.Sequential(Block(128, 256, stride=2), Block(256, 256, stride=1))
-        self.layer4 = nn.Sequential(Block(256, 256, stride=2), Block(256, 256, stride=1))
+        self.layer4 = nn.Sequential(Block(256, output_dim, stride=2), Block(output_dim, output_dim, stride=1))
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
 
         for m in self.modules():
@@ -50,7 +50,7 @@ class ResNet18(nn.Module):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
     
-    def forward(self, x, layer=100):
+    def forward(self, x):
         out = F.relu(self.bn1(self.conv1(x)))
         out = self.layer1(out)
         out = self.layer2(out)
@@ -62,13 +62,13 @@ class ResNet18(nn.Module):
     
 class ProjectionResNet18(nn.Module):
     """ResNet18 architecture with a projection head for contrastive learning."""
-    def __init__(self, feat_dim=128):
+    def __init__(self, feat_dim=128, repr_dim=256):
         super(ProjectionResNet18, self).__init__()
         self.encoder = ResNet18()
         self.head = nn.Sequential(
-            nn.Linear(256, 256),
+            nn.Linear(repr_dim, repr_dim),
             nn.ReLU(inplace=True),
-            nn.Linear(256, feat_dim)
+            nn.Linear(repr_dim, feat_dim)
         )
     
     def forward(self, x):
@@ -78,10 +78,10 @@ class ProjectionResNet18(nn.Module):
 
 class LinearResNet18(nn.Module):
     """ResNet18 architecture with a linear layer at the end for classification tasks."""
-    def __init__(self, num_classes=10):
+    def __init__(self, num_classes=10, repr_dim=256):
         super(LinearResNet18, self).__init__()
         self.encoder = ResNet18()
-        self.fc = nn.Linear(256, num_classes)
+        self.fc = nn.Linear(repr_dim, num_classes)
 
     def forward(self, x):
         features = self.encoder(x)
@@ -90,9 +90,9 @@ class LinearResNet18(nn.Module):
 
 class LinearClassifier(nn.Module):
     """Linear classifier on top of a ResNet18 encoder."""
-    def __init__(self, num_classes=10):
+    def __init__(self, num_classes=10, repr_dim=256):
         super(LinearClassifier, self).__init__()
-        self.fc = nn.Linear(256, num_classes)
+        self.fc = nn.Linear(repr_dim, num_classes)
 
     def forward(self, features):
         logits = self.fc(features)
