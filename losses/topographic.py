@@ -15,20 +15,20 @@ def get_grid_shape(n_units):
     return h, w
 
 def pos_dist(embedding_dim):
-    """
-    Generate a distance matrix for the positions in a grid of shape determined by embedding_dim. 
-    (i,j) of D indicates the distance between units i and j.
-    The grid is created such that the positions are evenly spaced in a 2D plane.
-    The distance matrix is computed using the Euclidean distance.
-    """
-    h, w = get_grid_shape(embedding_dim)
-    y = torch.linspace(0, 1, steps=h)
-    x = torch.linspace(0, 1, steps=w)
-    YY, XX = torch.meshgrid(y, x, indexing='ij')
-    pos_hw2 = torch.stack([XX, YY], dim=-1)
-    pos = pos_hw2.reshape(-1, 2)
-    D = torch.cdist(pos, pos, p=2)
-    return D
+        """
+        Generate a distance matrix for the positions in a grid of shape determined by embedding_dim. 
+        (i,j) of D indicates the distance between units i and j.
+        The grid is created such that the positions are evenly spaced in a 2D plane.
+        The distance matrix is computed using the Euclidean distance.
+        """
+        h, w = get_grid_shape(embedding_dim)
+        y = torch.linspace(0, 1, steps=h)
+        x = torch.linspace(0, 1, steps=w)
+        YY, XX = torch.meshgrid(y, x, indexing='ij')
+        pos_hw2 = torch.stack([XX, YY], dim=-1)
+        pos = pos_hw2.reshape(-1, 2)
+        D = torch.cdist(pos, pos, p=2)
+        return D
 
 class Global_Topographic_Loss(nn.Module):
     """
@@ -37,12 +37,10 @@ class Global_Topographic_Loss(nn.Module):
     precomputed distance matrix D.
     The distance matrix D should be precomputed using the pos_dist function.
     """
-    def __init__(self, weight=1.0, D=None):
+    def __init__(self, weight=1.0, repr_dim=256):
         super(Global_Topographic_Loss, self).__init__()
         self.weight = weight
-        if D is None:
-            raise ValueError("D must be provided for the topographic loss.")
-        self.D = D
+        D = pos_dist(repr_dim=256)
 
     def forward(self, pre_relu):
 
