@@ -146,7 +146,7 @@ def train(train_loader, model, task_loss, topographic_loss, optimizer, epoch, ar
 
         # compute and update top-1 accuracy (in %)
         acc1 = accuracy(features, labels, topk=(1,))[0]
-        acc.update(acc1[0], bsz)
+        acc.update(acc1.item() if hasattr(acc1, "item") else float(acc1), bsz)
 
         optimizer.zero_grad()
         loss.backward()
