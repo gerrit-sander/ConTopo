@@ -1,4 +1,6 @@
 import yaml
+import os
+import torch
 
 class TwoCropTransform:
     """
@@ -24,3 +26,28 @@ def load_cifar10_metadata(config_path="configs/cifar10.yaml"):
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
     return config
+
+class AverageMeter(object):
+    """Computes and stores the average and current value"""
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.val = 0
+        self.avg = 0
+        self.sum = 0
+        self.count = 0
+
+    def update(self, val, n=1):
+        self.val = val
+        self.sum += val * n
+        self.count += n
+        self.avg = self.sum / self.count
+
+def unwrap(model):
+    return model.module if isinstance(model, torch.nn.DataParallel) else model
+
+def save_checkpoint(path, payload):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    torch.save(payload, path)
+    print(f'>> Saved checkpoint to: {path}')

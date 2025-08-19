@@ -14,7 +14,7 @@ class ShallowCNN(nn.Module):
         self.conv1 = nn.Conv2d(in_channels, 32, 3, padding=1); self.bn1 = nn.BatchNorm2d(32)
         self.conv2 = nn.Conv2d(32, 64, 3, padding=1); self.bn2 = nn.BatchNorm2d(64)
         self.conv3 = nn.Conv2d(64, 128, 3, padding=1); self.bn3 = nn.BatchNorm2d(128)
-        self.conv4 = nn.Conv2d(128, emb_dim, 3, padding=1); self.bn4 = nn.BatchNorm2d(256)
+        self.conv4 = nn.Conv2d(128, 256, 3, padding=1); self.bn4 = nn.BatchNorm2d(256)
         self.gap = nn.AdaptiveAvgPool2d(1)
 
     def forward(self, x):
@@ -28,8 +28,9 @@ class ShallowCNN(nn.Module):
     
 class ProjectionShallowCNN(nn.Module):
     """Projection head for the ShallowCNN architecture."""
-    def __init__(self, emb_dim=256, feat_dim=128, p_dropout=0.2, use_dropout=True):
+    def __init__(self, emb_dim=256, feat_dim=128, p_dropout=0.2, use_dropout=True, ret_emb=False):
         super(ProjectionShallowCNN, self).__init__()
+        self.ret_emb = ret_emb
         self.encoder = ShallowCNN(emb_dim=emb_dim, p_dropout=p_dropout, use_dropout=use_dropout)
         self.head = nn.Sequential(
             nn.BatchNorm1d(emb_dim),
@@ -39,21 +40,22 @@ class ProjectionShallowCNN(nn.Module):
         )
     
     def forward(self, x):
-        features = self.encoder(x)
-        features = F.normalize(self.head(features), dim=1)
-        return features
+        embeddings = self.encoder(x)
+        features = F.normalize(self.head(embeddings), dim=1)
+        return (embeddings, features) if self.ret_emb else features
     
 class LinearShallowCNN(nn.Module):
     """ ShallowCNN architecture with a linear layer at the end for classification tasks."""
-    def __init__(self, emb_dim=256, num_classes=10, p_dropout=0.2, use_dropout=True):
+    def __init__(self, emb_dim=256, num_classes=10, p_dropout=0.2, use_dropout=True, ret_emb=False):
         super(LinearShallowCNN, self).__init__()
+        self.ret_emb = ret_emb
         self.encoder = ShallowCNN(embedding_dim=emb_dim, p_dropout=p_dropout, use_dropout=use_dropout)
         self.fc = nn.Linear(emb_dim, num_classes)
     
     def forward(self, x):
-        features = self.encoder(x)
-        logits = self.fc(features)
-        return logits
+        embeddings = self.encoder(x)
+        logits = self.fc(embeddings)
+        return (embeddings, logits) if self.ret_emb else logits
 
 
 class LinearClassifier(nn.Module):

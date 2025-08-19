@@ -62,8 +62,9 @@ class ResNet18(nn.Module):
     
 class ProjectionResNet18(nn.Module):
     """ResNet18 architecture with a projection head for contrastive learning."""
-    def __init__(self, emb_dim=256, feat_dim=128):
+    def __init__(self, emb_dim=256, feat_dim=128, ret_emb=False):
         super(ProjectionResNet18, self).__init__()
+        self.ret_emb = ret_emb
         self.encoder = ResNet18()
         self.head = nn.Sequential(
             nn.Linear(emb_dim, emb_dim),
@@ -72,28 +73,19 @@ class ProjectionResNet18(nn.Module):
         )
     
     def forward(self, x):
-        features = self.encoder(x)
-        features = F.normalize(self.head(features), dim=1)
-        return features
+        embeddings = self.encoder(x)
+        features = F.normalize(self.head(embeddings), dim=1)
+        return (embeddings, features) if self.ret_emb else features
 
 class LinearResNet18(nn.Module):
     """ResNet18 architecture with a linear layer at the end for classification tasks."""
-    def __init__(self, emb_dim=256, num_classes=10):
+    def __init__(self, emb_dim=256, num_classes=10, ret_emb=False):
         super(LinearResNet18, self).__init__()
+        self.ret_emb = ret_emb
         self.encoder = ResNet18()
         self.fc = nn.Linear(emb_dim, num_classes)
 
     def forward(self, x):
-        features = self.encoder(x)
-        logits = self.fc(features)
-        return logits
-
-class LinearClassifier(nn.Module):
-    """Linear classifier on top of a ResNet18 encoder."""
-    def __init__(self, emb_dim=256, num_classes=10):
-        super(LinearClassifier, self).__init__()
-        self.fc = nn.Linear(emb_dim, num_classes)
-
-    def forward(self, features):
-        logits = self.fc(features)
-        return logits
+        embeddings = self.encoder(x)
+        logits = self.fc(embeddings)
+        return (embeddings, logits) if self.ret_emb else logits
