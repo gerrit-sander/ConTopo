@@ -51,3 +51,23 @@ def save_checkpoint(path, payload):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     torch.save(payload, path)
     print(f'>> Saved checkpoint to: {path}')
+
+def accuracy(output, target, topk=(1,)):
+    """
+    Computes the accuracy over the k top predictions for the specified values of k.
+    Returns a list of tensors (percentages), one per k.
+    """
+    with torch.no_grad():
+        maxk = max(topk)
+        batch_size = target.size(0)
+
+        # output: [B, C] logits
+        _, pred = output.topk(maxk, dim=1, largest=True, sorted=True)  # [B, maxk]
+        pred = pred.t()                                                # [maxk, B]
+        correct = pred.eq(target.view(1, -1).expand_as(pred))          # [maxk, B]
+
+        res = []
+        for k in topk:
+            correct_k = correct[:k].reshape(-1).float().sum(0, keepdim=True)
+            res.append(correct_k.mul_(100.0 / batch_size))
+        return res

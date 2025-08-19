@@ -1,0 +1,313 @@
+import argparse
+from torchvision import transforms
+from torchvision import datasets
+from utils import load_cifar10_metadata, AverageMeter, save_checkpoint, unwrap, accuracy
+import torch
+import torch.backends.cudnn as cudnn
+from networks.shallowCNN import LinearShallowCNN, LinearClassifier
+from networks.modified_ResNet18 import LinearResNet18
+from losses.cosine_contrastive import CosineContrastiveLoss
+from losses.topographic import Global_Topographic_Loss
+import time
+import os
+import sys
+import torch.optim as optim
+import tensorboard_logger as tb_logger
+
+
+def parse_arguments():
+    parser = argparse.ArgumentParser()
+
+    # General settings
+    parser.add_argument('--print_freq', type=int, default=10, help='print frequency')
+    parser.add_argument('--epochs', type=int, default=1000, help='number of epochs to train')
+    parser.add_argument('--batch_size', type=int, default=256, help='batch size for training')
+    parser.add_argument('--num_workers', type=int, default=16, help='number of workers for data loading')
+    parser.add_argument('--learning_rate', type=float, default=0.05, help='learning rate')
+    parser.add_argument('model_type', type=str, choices=['shallowcnn', 'resnet18'], help='type of model to use')
+    
+    # Loss and model parameters
+    parser.add_argument('--embedding_dim', type=int, default=256, help='dimension of the embedding space')
+    parser.add_argument('--topographic_loss_lambda', type=float, default=1.0, help='weight for the topographic loss')
+
+    arguments = parser.parse_args()
+
+    subdir = 'ResNet18' if arguments.model_type == 'resnet18' else 'ShallowCNN'
+    arguments.model_folder = f'./save/{subdir}/models'
+    arguments.tensorboard_folder = f'./save/{subdir}/tensorboard'
+    arguments.dataset_folder = './dataset'
+    arguments.save_freq = max(1, arguments.epochs // 10)  # Save every 10% of epochs, rounded up
+    arguments.num_classes = 10  # CIFAR-10 has 10 classes
+
+    arguments.model_name = 'crossentropy_{}embdims_{}lambda_{}epochs_{}bsz_{}nwork_{}lr'.format(
+        arguments.embedding_dim,
+        arguments.topographic_loss_lambda, 
+        arguments.epochs,
+        arguments.batch_size,
+        arguments.num_workers,
+        arguments.learning_rate,
+    )
+
+    arguments.tensorboard_folder = os.path.join(arguments.tensorboard_folder, arguments.model_name)
+    if not os.path.isdir(arguments.tensorboard_folder):
+        os.makedirs(arguments.tensorboard_folder)
+
+    arguments.model_folder = os.path.join(arguments.model_folder, arguments.model_name)
+    if not os.path.isdir(arguments.model_folder):
+        os.makedirs(arguments.model_folder)
+
+    return arguments
+
+def cifar10_loader(arguments):
+
+    normalize = transforms.Normalize(mean=(0.4914, 0.4822, 0.4465), std=(0.2023, 0.1994, 0.2010))
+    
+    val_transform = transforms.Compose([
+        transforms.ToTensor(),
+        normalize,
+    ])
+
+    train_transform = transforms.Compose([
+    transforms.RandomResizedCrop(size=32, scale=(0.2, 1.)),
+    transforms.RandomHorizontalFlip(),
+    transforms.ToTensor(),
+    normalize,
+    ])
+
+    train_dataset = datasets.CIFAR10(root=arguments.dataset_folder, transform=train_transform, download=True)
+    val_dataset = datasets.CIFAR10(root=arguments.dataset_folder, train=False, download=True, transform=val_transform)
+    
+    train_loader = torch.utils.data.DataLoader(
+        train_dataset,
+        batch_size=arguments.batch_size,
+        shuffle=True,
+        num_workers=arguments.num_workers,
+        pin_memory=True,
+    )
+
+    val_loader = torch.utils.data.DataLoader(
+        val_dataset, batch_size=256, shuffle=False,
+        num_workers=8, pin_memory=True)
+    
+    return train_loader, val_loader
+
+def setup_model(arguments):
+
+    if arguments.model_type == 'shallowcnn':
+        model = LinearShallowCNN(emb_dim=arguments.embedding_dim, num_classes=arguments.num_classes, ret_emb=True, use_dropout=False)
+    elif arguments.model_type == 'resnet18':
+        model = LinearResNet18(emb_dim=arguments.embedding_dim, num_classes=arguments.num_classes, ret_emb=True)
+
+    task_loss = torch.nn.CrossEntropyLoss()
+
+    topographic_loss = Global_Topographic_Loss(weight=arguments.topographic_loss_lambda, emb_dim=arguments.embedding_dim)
+
+    if torch.cuda.is_available():
+        if torch.cuda.device_count() > 1:
+            model = torch.nn.DataParallel(model)
+        model = model.cuda()
+        if isinstance(task_loss, torch.nn.Module):
+            task_loss = task_loss.cuda()
+        if isinstance(topographic_loss, torch.nn.Module):
+            topographic_loss = topographic_loss.cuda()
+        cudnn.benchmark = True
+
+    return model, task_loss, topographic_loss
+
+def train(train_loader, model, task_loss, topographic_loss, optimizer, epoch, arguments):
+    model.train()
+    
+    batch_time = AverageMeter()
+    losses = AverageMeter()
+    topographic_losses = AverageMeter()
+    task_losses = AverageMeter()
+    data_time = AverageMeter()
+    acc = AverageMeter()
+
+    end = time.time()
+
+    for idx, (images, labels) in enumerate(train_loader):
+        data_time.update(time.time() - end)
+
+        device = next(model.parameters()).device
+        images = images.to(device, non_blocking=True)
+        labels = labels.to(device, non_blocking=True)
+        bsz = labels.shape[0]
+
+        embeddings, features = model(images)
+        task_loss_value = task_loss(features, labels)
+        topographic_loss_value = topographic_loss(embeddings)
+
+        loss = task_loss_value + topographic_loss_value
+
+        losses.update(loss.item(), bsz)
+        task_losses.update(task_loss_value.item(), bsz)
+        topographic_losses.update(topographic_loss_value.item(), bsz)
+
+        # compute and update top-1 accuracy (in %)
+        acc1 = accuracy(features, labels, topk=(1,))[0]
+        acc.update(acc1[0], bsz)
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        batch_time.update(time.time() - end)
+        end = time.time()
+
+        # print info
+        if (idx + 1) % arguments.print_freq == 0:
+            print(f'Epoch: [{epoch}][{idx + 1}/{len(train_loader)}]\t'
+                  f'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
+                  f'Loss {losses.val:.4f} ({losses.avg:.4f})\t'
+                  f'Topographic Loss {topographic_losses.val:.4f} ({topographic_losses.avg:.4f})\t'
+                  f'Task Loss {task_losses.val:.4f} ({task_losses.avg:.4f})\t'
+                  f'Data Time {data_time.val:.3f} ({data_time.avg:.3f})\t'
+                  f'Acc@1 {acc.val:.3f} ({acc.avg:.3f})')
+            sys.stdout.flush()
+
+    return losses.avg, topographic_losses.avg, task_losses.avg
+
+def validate(val_loader, model, criterion, arguments):
+    model.eval()
+
+    batch_time = AverageMeter()
+    losses = AverageMeter()
+    acc = AverageMeter()
+
+    with torch.no_grad():
+        end = time.time()
+        for idx, (images, labels) in enumerate(val_loader):
+            device = next(model.parameters()).device
+            images = images.to(device, dtype=torch.float32, non_blocking=True)
+            labels = labels.to(device, non_blocking=True)
+            bsz = labels.shape[0]
+
+            # forward
+            output = model(images)
+            loss = criterion(output, labels)
+
+            # update metric
+            losses.update(loss.item(), bsz)
+            _, predicted = output.max(1)
+            correct = predicted.eq(labels).sum().item()
+            acc_value = correct / bsz
+            acc.update(acc_value, bsz)
+
+            # measure elapsed time
+            batch_time.update(time.time() - end)
+            end = time.time()
+
+            if idx % arguments.print_freq == 0:
+                print('Test: [{0}/{1}]\t'
+                      'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
+                      'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
+                      'Acc@1 {acc.val:.3f} ({acc.avg:.3f})'.format(
+                       idx, len(val_loader), batch_time=batch_time,
+                       loss=losses, acc=acc))
+
+    print(' * Acc@1 {acc.avg:.3f}'.format(acc=acc))
+    return losses.avg, acc.avg
+
+def main():
+    arguments = parse_arguments()
+
+    train_loader, val_loader = cifar10_loader(arguments)
+
+    model, task_loss, topographic_loss = setup_model(arguments)
+
+    optimizer = optim.SGD(model.parameters(),
+                          lr=arguments.learning_rate,
+                          momentum=0.9,
+                          weight_decay=1e-4)
+
+    logger = tb_logger.Logger(logdir=arguments.tensorboard_folder, flush_secs=2)
+
+    # We'll track the best model by validation accuracy
+    best_val_acc = 0.0
+    last_val_acc = 0.0
+
+    # Helper that makes the model return logits only (validate() expects logits)
+    class LogitsOnly(torch.nn.Module):
+        def __init__(self, model):
+            super().__init__()
+            self.model = model
+        def forward(self, x):
+            out = self.model(x)
+            if isinstance(out, (tuple, list)):
+                return out[1]
+            return out
+
+    logits_model = LogitsOnly(model)
+
+    for epoch in range(1, arguments.epochs + 1):
+        time1 = time.time()
+        # Train end-to-end with CE (plus optional topographic loss inside train())
+        avg_loss, avg_topoloss, avg_taskloss = train(
+            train_loader, model, task_loss, topographic_loss, optimizer, epoch, arguments
+        )
+        time2 = time.time()
+        print('epoch {}, total time {:.2f}'.format(epoch, time2 - time1))
+
+        # Log training metrics
+        logger.log_value('train_total_loss', avg_loss, epoch)
+        logger.log_value('train_task_loss', avg_taskloss, epoch)
+        logger.log_value('train_topographic_loss', avg_topoloss, epoch)
+
+        # Validation on logits
+        val_loss, val_acc = validate(val_loader, logits_model, task_loss, arguments)
+        last_val_acc = val_acc
+        logger.log_value('val_loss', val_loss, epoch)
+        logger.log_value('val_acc', val_acc, epoch)
+
+        # Save periodic checkpoint
+        if (epoch % arguments.save_freq) == 0:
+            state = {
+                'stage': 'e2e',
+                'epoch': epoch,
+                'state_dict': unwrap(model).state_dict(),
+                'optimizer': optimizer.state_dict(),
+                'args': vars(arguments),
+                'metrics': {
+                    'train_total_loss': avg_loss,
+                    'train_task_loss': avg_taskloss,
+                    'train_topographic_loss': avg_topoloss,
+                    'val_loss': val_loss,
+                    'val_acc': val_acc,
+                }
+            }
+            ckpt_path = os.path.join(arguments.model_folder, f'e2e_epoch{epoch:04d}.pth')
+            save_checkpoint(ckpt_path, state)
+
+        # Save best-by-validation-accuracy checkpoint
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
+            best_state = {
+                'stage': 'e2e',
+                'epoch': epoch,
+                'state_dict': unwrap(model).state_dict(),
+                'optimizer': optimizer.state_dict(),
+                'args': vars(arguments),
+                'metrics': {
+                    'train_total_loss': avg_loss,
+                    'train_task_loss': avg_taskloss,
+                    'train_topographic_loss': avg_topoloss,
+                    'val_loss': val_loss,
+                    'val_acc': val_acc,
+                }
+            }
+            best_path = os.path.join(arguments.model_folder, 'e2e_best.pth')
+            save_checkpoint(best_path, best_state)
+
+    # Always save a final "last" snapshot for e2e training
+    final_e2e = {
+        'stage': 'e2e',
+        'epoch': arguments.epochs,
+        'state_dict': unwrap(model).state_dict(),
+        'optimizer': optimizer.state_dict(),
+        'args': vars(arguments),
+        'val_acc': last_val_acc,
+    }
+    save_checkpoint(os.path.join(arguments.model_folder, 'e2e_last.pth'), final_e2e)
+if __name__ == '__main__':
+    main()
