@@ -8,7 +8,6 @@ def prepare_pairs(batch_size, embeddings, device, labels, superclass, superclass
     This function generates pairs of embeddings based on their labels and animacy classes.
     It returns the true labels for the pairs, the pairs themselves, and animacy labels.
     """
-    # --- required shape/size checks (fatal if violated) ---
     if embeddings.dim() != 2:
         raise ValueError(f"'embeddings' must be 2D [B, D], got {tuple(embeddings.shape)}")
     if labels.dim() != 1:
@@ -27,7 +26,6 @@ def prepare_pairs(batch_size, embeddings, device, labels, superclass, superclass
         for j in range(i + 1, batch_size):
             y_true.append(1 if labels[i].item() == labels[j].item() else 0)
 
-            # These lookups must exist for all classes (else KeyError).
             cls_i = classnames[labels[i].item()]
             cls_j = classnames[labels[j].item()]
             animacy_labels.append([
@@ -78,7 +76,6 @@ class CosineContrastiveLoss(nn.Module):
         cosine_distances = 1 - F.cosine_similarity(y_pred[:, 0, :], y_pred[:, 1, :], dim=-1)
 
         # Determine dynamic margins based on animacy
-        # NOTE there is a also a hard wired positvedistance margin
         posdist_margin = 0.05
         same_animacy = (animacy_labels[:, 0] == animacy_labels[:, 1])
         margins = torch.where(
