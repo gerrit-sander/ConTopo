@@ -1,3 +1,4 @@
+import argparse
 import os
 import torch
 
@@ -159,3 +160,54 @@ def load_encoder_from_run_folder(
         f"No suitable checkpoint found in {run_folder}. "
         "Expected one of: contrastive_best/last.pth or e2e_best/last.pth"
     )
+
+def load_encoder_from_path(path: str, device: str, prefer: str, dp: bool):
+    """Helper that accepts either a checkpoint file or a run folder."""
+    if os.path.isdir(path):
+        encoder, meta = load_encoder_from_run_folder(
+            run_folder=path,
+            prefer=prefer,
+            device=device,
+            dp_if_multi_gpu=dp,
+            eval_mode=True,
+        )
+    else:
+        encoder, meta = load_encoder_from_ckpt(
+            ckpt_path=path,
+            device=device,
+            dp_if_multi_gpu=dp,
+            eval_mode=True,
+        )
+    return encoder, meta
+
+def parse_model_load_args():
+    parser = argparse.ArgumentParser(
+        description="Load a trained encoder (from CE or contrastive) and run eval-time experiments."
+    )
+    parser.add_argument(
+        "path",
+        help=(
+            "Relative path to a checkpoint file (e2e_*.pth / contrastive_*.pth) "
+            "or a run folder that contains them."
+        ),
+    )
+    parser.add_argument(
+        "--prefer",
+        choices=["best", "last"],
+        default="best",
+        help="When 'path' is a run folder, choose which checkpoint to load.",
+    )
+    parser.add_argument(
+        "--device",
+        default="cuda" if torch.cuda.is_available() else "cpu",
+        help="Device to load the model on, e.g. 'cuda' or 'cpu'.",
+    )
+    parser.add_argument(
+        "--dp",
+        action="store_true",
+        help="Wrap the returned encoder in DataParallel if multiple GPUs are available.",
+    )
+    parser.add_argument("--batch-size", type=int, default=256)
+    parser.add_argument("--num-workers", type=int, default=8)
+    parser.add_argument("--dataset-root", default="./dataset")
+    return parser.parse_args()

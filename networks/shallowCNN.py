@@ -15,14 +15,14 @@ class ShallowCNN(nn.Module):
         self.conv2 = nn.Conv2d(32, 64, 3, padding=1); self.bn2 = nn.BatchNorm2d(64)
         self.conv3 = nn.Conv2d(64, 128, 3, padding=1); self.bn3 = nn.BatchNorm2d(128)
         self.conv4 = nn.Conv2d(128, emb_dim, 3, padding=1); self.bn4 = nn.BatchNorm2d(emb_dim)
-        self.gap = nn.AdaptiveAvgPool2d(1)
+        self.avgpool = nn.AdaptiveAvgPool2d(1)
 
     def forward(self, x):
         out = F.max_pool2d(F.relu(self.bn1(self.conv1(x))), 2)
         out = F.max_pool2d(F.relu(self.bn2(self.conv2(out))), 2)
         out = F.max_pool2d(F.relu(self.bn3(self.conv3(out))), 2)
         out = F.relu(self.bn4(self.conv4(out)))
-        out = self.gap(out)
+        out = self.avgpool(out)
         out = torch.flatten(out, 1)
         return out
     
