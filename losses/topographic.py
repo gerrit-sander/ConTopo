@@ -29,39 +29,36 @@ class Global_Topographic_Loss(nn.Module):
     Global topographic loss based on the cosine similarity of the pre-activation features.
     The loss encourages the cosine similarity between units to be inversely proportional to their distance in a
     precomputed distance matrix D.
-    The distance matrix D should be precomputed using the pos_dist function.
+    The distance matrix D is computed internally in __init__ using the pos_dist function with emb_dim.
     """
     def __init__(self, weight=1.0, emb_dim=256):
         super(Global_Topographic_Loss, self).__init__()
         self.weight = weight
-        D = pos_dist(repr_dim=emb_dim)
+        self.D = pos_dist(emb_dim)
 
     def forward(self, pre_relu):
-
-        device = (torch.device('cuda')
-                  if pre_relu.is_cuda
-                  else torch.device('cpu'))
-        
-        self.D.to(device)
-
         if pre_relu is None:
             raise ValueError("pre_relu must be provided.")
+        if pre_relu.dim() != 2:
+            raise ValueError(f"pre_relu must be 2D [B, C], got shape {tuple(pre_relu.shape)}")
+
+        # Ensure D is on the same device as inputs
+        self.D = self.D.to(pre_relu.device)
 
         _, n_units = pre_relu.shape
 
-        if self.D is None:
-            raise ValueError("D must be provided (precompute with pos_dist(n_units)).")
         if self.D.shape != (n_units, n_units):
             raise ValueError(f"D must have shape ({n_units}, {n_units}), got {tuple(self.D.shape)}")
 
-        # Cosine similarity between units
-        Xn = F.normalize(pre_relu, p=2, dim=0, eps=1e-12)   # [B, C]
-        S = Xn.t() @ Xn                                     # (C, C)
+        # Cosine similarity between units (columns)
+        Xn = F.normalize(pre_relu, p=2, dim=0, eps=1e-12)  # [B, C]
+        S = Xn.t() @ Xn                                    # (C, C)
 
-        i_idx, j_idx = torch.triu_indices(n_units, n_units, offset=1, device=pre_relu.device)
+        i_idx, j_idx = torch.triu_indices(
+            n_units, n_units, offset=1, device=pre_relu.device
+        )
         d = self.D[i_idx, j_idx]
         s = S[i_idx, j_idx]
 
         topo_loss_val = ((s - (1.0 / (d + 1.0))) ** 2).sum()
-
         return self.weight * (2.0 / (n_units * (n_units - 1))) * topo_loss_val
