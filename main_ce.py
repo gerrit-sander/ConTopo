@@ -1,7 +1,7 @@
 import argparse
 from torchvision import transforms
 from torchvision import datasets
-from utils.train import load_cifar10_metadata, AverageMeter, save_checkpoint, unwrap, accuracy
+from utils.train import AverageMeter, save_checkpoint, unwrap, accuracy
 import torch
 import torch.backends.cudnn as cudnn
 from networks.shallowCNN import LinearShallowCNN, LinearClassifier
