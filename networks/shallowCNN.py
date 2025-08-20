@@ -14,7 +14,7 @@ class ShallowCNN(nn.Module):
         self.conv1 = nn.Conv2d(in_channels, 32, 3, padding=1); self.bn1 = nn.BatchNorm2d(32)
         self.conv2 = nn.Conv2d(32, 64, 3, padding=1); self.bn2 = nn.BatchNorm2d(64)
         self.conv3 = nn.Conv2d(64, 128, 3, padding=1); self.bn3 = nn.BatchNorm2d(128)
-        self.conv4 = nn.Conv2d(128, 256, 3, padding=1); self.bn4 = nn.BatchNorm2d(256)
+        self.conv4 = nn.Conv2d(128, emb_dim, 3, padding=1); self.bn4 = nn.BatchNorm2d(emb_dim)
         self.gap = nn.AdaptiveAvgPool2d(1)
 
     def forward(self, x):
