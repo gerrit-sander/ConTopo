@@ -65,7 +65,8 @@ class ProjectionResNet18(nn.Module):
     def __init__(self, emb_dim=256, feat_dim=128, ret_emb=False):
         super(ProjectionResNet18, self).__init__()
         self.ret_emb = ret_emb
-        self.encoder = ResNet18()
+        self.emb_dim = emb_dim
+        self.encoder = ResNet18(emb_dim=emb_dim)
         self.head = nn.Sequential(
             nn.Linear(emb_dim, emb_dim),
             nn.ReLU(inplace=True),
@@ -82,7 +83,7 @@ class LinearResNet18(nn.Module):
     def __init__(self, emb_dim=256, num_classes=10, ret_emb=False):
         super(LinearResNet18, self).__init__()
         self.ret_emb = ret_emb
-        self.encoder = ResNet18()
+        self.encoder = ResNet18(emb_dim=emb_dim)
         self.fc = nn.Linear(emb_dim, num_classes)
 
     def forward(self, x):

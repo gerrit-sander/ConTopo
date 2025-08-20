@@ -31,7 +31,7 @@ class ProjectionShallowCNN(nn.Module):
     def __init__(self, emb_dim=256, feat_dim=128, p_dropout=0.2, use_dropout=True, ret_emb=False):
         super(ProjectionShallowCNN, self).__init__()
         self.ret_emb = ret_emb
-        self.encoder = ShallowCNN(emb_dim=emb_dim, p_dropout=p_dropout, use_dropout=use_dropout)
+        self.encoder = ShallowCNN(emb_dim=emb_dim)
         self.head = nn.Sequential(
             nn.BatchNorm1d(emb_dim),
             nn.ReLU(inplace=True),
@@ -49,7 +49,7 @@ class LinearShallowCNN(nn.Module):
     def __init__(self, emb_dim=256, num_classes=10, p_dropout=0.2, use_dropout=True, ret_emb=False):
         super(LinearShallowCNN, self).__init__()
         self.ret_emb = ret_emb
-        self.encoder = ShallowCNN(embedding_dim=emb_dim, p_dropout=p_dropout, use_dropout=use_dropout)
+        self.encoder = ShallowCNN(emb_dim=emb_dim)
         self.fc = nn.Linear(emb_dim, num_classes)
     
     def forward(self, x):
