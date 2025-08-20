@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import math
 
 from utils.load import load_encoder_from_path, parse_model_load_args
-from utils.experiments import get_cifar10_eval_loader
+from utils.experiments import get_cifar10_eval_loader, resolve_figure_path
 from utils.train import load_cifar10_metadata
 
 def main():
@@ -103,6 +103,8 @@ def main():
         fig.colorbar(im, ax=axes[i, 1], fraction=0.046, pad=0.04)
 
     plt.tight_layout()
+    figurepath = resolve_figure_path(src)
+    plt.savefig(figurepath, dpi=200, bbox_inches='tight')
     plt.show()
 
 
