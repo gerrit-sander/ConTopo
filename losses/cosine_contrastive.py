@@ -8,17 +8,26 @@ def prepare_pairs(batch_size, embeddings, device, labels, superclass, superclass
     This function generates pairs of embeddings based on their labels and animacy classes.
     It returns the true labels for the pairs, the pairs themselves, and animacy labels.
     """
+    # --- required shape/size checks (fatal if violated) ---
+    if embeddings.dim() != 2:
+        raise ValueError(f"'embeddings' must be 2D [B, D], got {tuple(embeddings.shape)}")
+    if labels.dim() != 1:
+        raise ValueError(f"'labels' must be 1D [B], got {tuple(labels.shape)}")
+    if batch_size != embeddings.size(0) or batch_size != labels.size(0):
+        raise ValueError(f"'batch_size' must match embeddings/labels (got {batch_size}, "
+                         f"{embeddings.size(0)}, {labels.size(0)})")
+    if batch_size < 2:
+        raise ValueError("Batch size must be at least 2 to form pairs.")
+
     y_true = []
     pairs = []
     animacy_labels = []
 
     for i in range(batch_size):
         for j in range(i + 1, batch_size):
-            if labels[i].item() == labels[j].item():
-                y_true.append(1)
-            else:
-                y_true.append(0)
+            y_true.append(1 if labels[i].item() == labels[j].item() else 0)
 
+            # These lookups must exist for all classes (else KeyError).
             cls_i = classnames[labels[i].item()]
             cls_j = classnames[labels[j].item()]
             animacy_labels.append([
@@ -26,13 +35,14 @@ def prepare_pairs(batch_size, embeddings, device, labels, superclass, superclass
                 superclass_mapping[superclass[cls_j]],
             ])
 
-            pairs.append(torch.stack([embeddings[i], embeddings[j]]))
+            pairs.append(torch.stack([embeddings[i], embeddings[j]]))  # [2, D]
 
     y_true = torch.tensor(y_true, dtype=torch.float32, device=device)
     animacy_labels = torch.tensor(animacy_labels, dtype=torch.int32, device=device)
-    pairs = torch.stack(pairs)
+    pairs = torch.stack(pairs)  # [num_pairs, 2, D]
     pairs = pairs.view(-1, 2, embeddings.size(-1))
-    return y_true, pairs, animacy_labels  
+    return y_true, pairs, animacy_labels
+
 
 class CosineContrastiveLoss(nn.Module):
     """
@@ -51,6 +61,10 @@ class CosineContrastiveLoss(nn.Module):
         self.classnames = classnames
 
     def forward(self, projections, labels):
+        # Enforce expected shape for projections.
+        if projections.dim() != 2:
+            raise ValueError(f"'projections' must be 2D [B, D], got {tuple(projections.shape)}")
+
         y_true, y_pred, animacy_labels = prepare_pairs(
             batch_size=projections.size(0),
             embeddings=projections,
@@ -66,9 +80,14 @@ class CosineContrastiveLoss(nn.Module):
         # Determine dynamic margins based on animacy
         # NOTE there is a also a hard wired positvedistance margin
         posdist_margin = 0.05
-        margins = torch.where(animacy_labels[:, 0] == animacy_labels[:, 1], self.margin_same, self.margin_diff)
+        same_animacy = (animacy_labels[:, 0] == animacy_labels[:, 1])
+        margins = torch.where(
+            same_animacy,
+            torch.full_like(cosine_distances, float(self.margin_same)),
+            torch.full_like(cosine_distances, float(self.margin_diff)),
+        )
+
         positive_distances = y_true * torch.square(torch.clamp(cosine_distances - posdist_margin, min=0.0))
-        # positive_distances = y_true * torch.square(cosine_distances)
         negative_distances = (1 - y_true) * torch.square(torch.clamp(margins - cosine_distances, min=0.0))
 
         return torch.mean(positive_distances + negative_distances)
