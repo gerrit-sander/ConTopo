@@ -22,7 +22,7 @@ def parse_arguments():
     parser.add_argument('--print_freq', type=int, default=10, help='print frequency')
     parser.add_argument('--epochs', type=int, default=1000, help='number of epochs to train')
     parser.add_argument('--batch_size', type=int, default=256, help='batch size for training')
-    parser.add_argument('--num_workers', type=int, default=16, help='number of workers for data loading')
+    parser.add_argument('--num_workers', type=int, default=2, help='number of workers for data loading')
     parser.add_argument('--readout_epochs', type=int, default=100, help='number of epochs for readout training')
     parser.add_argument('--learning_rate', type=float, default=0.05, help='learning rate')
     parser.add_argument('model_type', type=str, choices=['shallowcnn', 'resnet18'], help='type of model to use')

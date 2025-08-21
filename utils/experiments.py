@@ -10,7 +10,7 @@ CIFAR10_STD  = (0.2023, 0.1994, 0.2010)
 def get_cifar10_eval_loader(
     root: str = "./dataset",
     batch_size: int = 256,
-    num_workers: int = 8,
+    num_workers: int = 2,
     pin_memory: bool | None = None,
     drop_last: bool = False,
     subset: int | None = None,
