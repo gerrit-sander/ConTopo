@@ -1,7 +1,7 @@
 import argparse
 from torchvision import transforms
 from torchvision import datasets
-from utils.train import AverageMeter, save_checkpoint, unwrap, accuracy
+from utils.train import AverageMeter, save_checkpoint, unwrap, accuracy, tb_logger
 import torch
 import torch.backends.cudnn as cudnn
 from networks.shallowCNN import LinearShallowCNN, LinearClassifier
@@ -12,7 +12,6 @@ import time
 import os
 import sys
 import torch.optim as optim
-import tensorboard_logger as tb_logger
 
 
 def parse_arguments():
@@ -309,5 +308,9 @@ def main():
         'val_acc': last_val_acc,
     }
     save_checkpoint(os.path.join(arguments.model_folder, 'e2e_last.pth'), final_e2e)
+    
+    if hasattr(logger, "close"):
+        logger.close()
+
 if __name__ == '__main__':
     main()

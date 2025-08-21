@@ -1,6 +1,7 @@
 import yaml
 import os
 import torch
+from torch.utils.tensorboard import SummaryWriter
 
 class TwoCropTransform:
     """
@@ -71,3 +72,20 @@ def accuracy(output, target, topk=(1,)):
             correct_k = correct[:k].reshape(-1).float().sum(0, keepdim=True)
             res.append(correct_k.mul_(100.0 / batch_size))
         return res
+    
+class tb_logger:
+        class Logger:
+            def __init__(self, logdir, flush_secs=2):
+                os.makedirs(logdir, exist_ok=True)
+                # SummaryWriter flushes on close; set flush_secs if supported
+                try:
+                    self.writer = SummaryWriter(log_dir=logdir, flush_secs=flush_secs)
+                except TypeError:
+                    # Older PyTorch versions may not support flush_secs
+                    self.writer = SummaryWriter(log_dir=logdir)
+
+            def log_value(self, tag, value, step):
+                self.writer.add_scalar(tag, value, step)
+
+            def close(self):
+                self.writer.close()

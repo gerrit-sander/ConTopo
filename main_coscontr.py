@@ -1,7 +1,7 @@
 import argparse
 from torchvision import transforms
 from torchvision import datasets
-from utils.train import load_cifar10_metadata, AverageMeter, save_checkpoint, unwrap
+from utils.train import load_cifar10_metadata, AverageMeter, save_checkpoint, unwrap, tb_logger
 import torch
 import torch.backends.cudnn as cudnn
 from networks.shallowCNN import ProjectionShallowCNN, LinearClassifier
@@ -12,7 +12,6 @@ import time
 import os
 import sys
 import torch.optim as optim
-import tensorboard_logger as tb_logger
 
 
 def parse_arguments():
@@ -406,6 +405,9 @@ def main():
             'val_acc': last_val_acc,
         }
     )
+
+    if hasattr(logger, "close"):
+        logger.close()
                 
 if __name__ == '__main__':
     main()
