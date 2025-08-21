@@ -21,7 +21,7 @@ class ShallowCNN(nn.Module):
         out = F.max_pool2d(F.relu(self.bn1(self.conv1(x))), 2)
         out = F.max_pool2d(F.relu(self.bn2(self.conv2(out))), 2)
         out = F.max_pool2d(F.relu(self.bn3(self.conv3(out))), 2)
-        out = F.relu(self.bn4(self.conv4(out)))
+        out = self.bn4(self.conv4(out))
         out = self.avgpool(out)
         out = torch.flatten(out, 1)
         return out
