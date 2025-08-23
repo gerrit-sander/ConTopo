@@ -3,6 +3,17 @@ import torch.nn as nn
 import math
 import torch.nn.functional as F
 
+def get_grid_shape(n_units):
+    """
+    Calculate a grid size (h, w) for a given number of units.
+    The grid is chosen such that h * w = n_units and h is as close to w as possible.
+    """
+    h = int(math.sqrt(n_units))
+    while n_units % h != 0:
+        h -= 1
+    w = n_units // h
+    return h, w
+
 def pos_dist(embedding_dim):
         """
         Generate a distance matrix for the positions in a grid of shape determined by embedding_dim. 
@@ -10,12 +21,7 @@ def pos_dist(embedding_dim):
         The grid is created such that the positions are evenly spaced in a 2D plane.
         The distance matrix is computed using the Euclidean distance.
         """
-        
-        h = int(math.sqrt(embedding_dim))
-        while embedding_dim % h != 0:
-            h -= 1
-        w = embedding_dim // h
-
+        h, w = get_grid_shape(embedding_dim)
         y = torch.linspace(0, 1, steps=h)
         x = torch.linspace(0, 1, steps=w)
         YY, XX = torch.meshgrid(y, x, indexing='ij')
@@ -62,3 +68,52 @@ class Global_Topographic_Loss(nn.Module):
 
         topo_loss_val = ((s - (1.0 / (d + 1.0))) ** 2).sum()
         return self.weight * (2.0 / (n_units * (n_units - 1))) * topo_loss_val
+    
+class Local_WS_Loss(nn.Module):
+    """
+    Local topographic loss based on the weight matrix of a linear layer.
+    The loss encourages the weights to have a topographic structure by minimizing the differences
+    between neighboring weights in a grid-like structure.
+    The grid is determined by the shape of the weight matrix.
+    The loss is computed as the average L2 distance between neighboring weights.
+    """
+    def __init__(self, weight=1.0):
+        super(Local_WS_Loss, self).__init__()
+        self.weight = weight
+
+    def forward(self, linear_layer=None):
+        if linear_layer is None:
+            raise ValueError("linear_layer must be provided.")
+
+        if not isinstance(linear_layer, nn.Linear):
+            raise ValueError("linear_layer must be an instance of nn.Linear.")
+
+        W = linear_layer.weight
+        out_feats, in_feats = W.shape
+        if W.ndim != 2:
+            raise ValueError("linear_layer must have 2 dimensions (out_feats, in_feats).")
+        
+        h, w = get_grid_shape(out_feats) # (h, w)
+        G = W.reshape(h, w, in_feats) # (h, w, in_feats)
+        diffs = []
+        # right
+        if w > 1:
+            diffs.append(G[:, :-1, :] - G[:, 1:, :])          # (H, W-1, C)
+        # down
+        if h > 1:
+            diffs.append(G[:-1, :, :] - G[1:, :, :])          # (H-1, W, C)
+        # down-right
+        if h > 1 and w > 1:
+            diffs.append(G[:-1, :-1, :] - G[1:, 1:, :])       # (H-1, W-1, C)
+        # down-left
+        if h > 1 and w > 1:
+            diffs.append(G[:-1, 1:, :] - G[1:, :-1, :])       # (H-1, W-1, C)
+
+        if not diffs:
+            return torch.zeros((), device=W.device, dtype=W.dtype)
+
+        # L2 distance across the feature dimension, then average over all pairs
+        dists = [torch.linalg.norm(d, dim=-1) for d in diffs]
+        topo_loss_val = torch.cat([x.reshape(-1) for x in dists]).mean()
+
+        return self.weight * topo_loss_val

@@ -16,6 +16,7 @@ class ShallowCNN(nn.Module):
         self.conv3 = nn.Conv2d(64, 128, 3, padding=1); self.bn3 = nn.BatchNorm2d(128)
         self.conv4 = nn.Conv2d(128, emb_dim, 3, padding=1); self.bn4 = nn.BatchNorm2d(emb_dim)
         self.avgpool = nn.AdaptiveAvgPool2d(1)
+        self.fc = nn.Linear(emb_dim, emb_dim)
 
     def forward(self, x):
         out = F.max_pool2d(F.relu(self.bn1(self.conv1(x))), 2)
@@ -24,6 +25,7 @@ class ShallowCNN(nn.Module):
         out = self.bn4(self.conv4(out))
         out = self.avgpool(out)
         out = torch.flatten(out, 1)
+        out = self.fc(out)
         return out
     
 class ProjectionShallowCNN(nn.Module):
@@ -48,6 +50,8 @@ class LinearShallowCNN(nn.Module):
     """ ShallowCNN architecture with a linear layer at the end for classification tasks."""
     def __init__(self, emb_dim=256, num_classes=10, p_dropout=0.2, use_dropout=True, ret_emb=False):
         super(LinearShallowCNN, self).__init__()
+        if use_dropout or p_dropout > 0:
+            print(f"Warning: Dropout in the cross entropy model is not implemented and will be ignored.")
         self.ret_emb = ret_emb
         self.encoder = ShallowCNN(emb_dim=emb_dim)
         self.fc = nn.Linear(emb_dim, num_classes)

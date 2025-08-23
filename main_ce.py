@@ -7,7 +7,7 @@ import torch.backends.cudnn as cudnn
 from networks.shallowCNN import LinearShallowCNN, LinearClassifier
 from networks.modified_ResNet18 import LinearResNet18
 from losses.cosine_contrastive import CosineContrastiveLoss
-from losses.topographic import Global_Topographic_Loss
+from losses.topographic import Global_Topographic_Loss, Local_WS_Loss
 import time
 import os
 import sys
@@ -24,6 +24,9 @@ def parse_arguments():
     parser.add_argument('--num_workers', type=int, default=2, help='number of workers for data loading')
     parser.add_argument('--learning_rate', type=float, default=0.05, help='learning rate')
     parser.add_argument('model_type', type=str, choices=['shallowcnn', 'resnet18'], help='type of model to use')
+    parser.add_argument('--use_dropout', action='store_true', help='use dropout in the projection head (if applicable)')
+    parser.add_argument('--p_dropout', type=float, default=0.0, help='dropout probability (if applicable)')
+    parser.add_argument('topography_type', type=str, choices=['global', 'ws'], help='type of topographic loss to use')
     
     # Loss and model parameters
     parser.add_argument('--embedding_dim', type=int, default=256, help='dimension of the embedding space')
@@ -93,13 +96,16 @@ def cifar10_loader(arguments):
 def setup_model(arguments):
 
     if arguments.model_type == 'shallowcnn':
-        model = LinearShallowCNN(emb_dim=arguments.embedding_dim, num_classes=arguments.num_classes, ret_emb=True, use_dropout=False)
+        model = LinearShallowCNN(emb_dim=arguments.embedding_dim, num_classes=arguments.num_classes, ret_emb=True, use_dropout=arguments.use_dropout, p_dropout=arguments.p_dropout)
     elif arguments.model_type == 'resnet18':
         model = LinearResNet18(emb_dim=arguments.embedding_dim, num_classes=arguments.num_classes, ret_emb=True)
 
     task_loss = torch.nn.CrossEntropyLoss()
 
-    topographic_loss = Global_Topographic_Loss(weight=arguments.topographic_loss_lambda, emb_dim=arguments.embedding_dim)
+    if arguments.topography_type == 'global':
+        topographic_loss = Global_Topographic_Loss(weight=arguments.topographic_loss_lambda, emb_dim=arguments.embedding_dim)
+    elif arguments.topography_type == 'ws':
+        topographic_loss = Local_WS_Loss(weight=arguments.topographic_loss_lambda, emb_dim=arguments.embedding_dim)
 
     if torch.cuda.is_available():
         if torch.cuda.device_count() > 1:
@@ -135,7 +141,12 @@ def train(train_loader, model, task_loss, topographic_loss, optimizer, epoch, ar
 
         embeddings, features = model(images)
         task_loss_value = task_loss(features, labels)
-        topographic_loss_value = topographic_loss(embeddings)
+        
+        if arguments.topography_type == 'ws':
+            linear_layer = model.module.fc if isinstance(model, torch.nn.DataParallel) else model.fc
+            topographic_loss_value = topographic_loss(linear_layer=linear_layer)
+        elif arguments.topography_type == 'global':
+            topographic_loss_value = topographic_loss(embeddings)
 
         loss = task_loss_value + topographic_loss_value
 
