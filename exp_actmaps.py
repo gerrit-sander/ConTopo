@@ -49,22 +49,22 @@ def main():
     sample_imgs = torch.stack(images).to(device) # (10, 3, 32, 32)
     n_images = 10
 
-    # hook function to grab avgpool activations (flattened)
+    # hook function to grab fc activations (flattened)
     activations = []
     def hook_fn(module, inp, out):
-        activations.append(out.detach().cpu().flatten(1))  # [B, C, 1, 1] -> [B, C]
+        activations.append(out.detach().cpu().flatten(1))  # [B, D]
 
     enc = encoder.module if hasattr(encoder, 'module') else encoder
-    if not hasattr(enc, 'avgpool'):
-        raise AttributeError("Encoder has no 'avgpool' module to hook.")
-    handle = enc.avgpool.register_forward_hook(hook_fn)
+    if not hasattr(enc, 'fc'):
+        raise AttributeError("Encoder has no 'fc' module to hook.")
+    handle = enc.fc.register_forward_hook(hook_fn)
 
     with torch.no_grad():
         _ = encoder(sample_imgs)
     handle.remove()
 
     if not activations:
-        raise RuntimeError("Forward hook did not fire; check that 'avgpool' exists on the encoder.")
+        raise RuntimeError("Forward hook did not fire; check that 'fc' exists on the encoder.")
     act = activations[0]
 
     emb_dim = act.shape[1]
