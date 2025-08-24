@@ -241,10 +241,7 @@ def main():
     ### CONTRASTIVE LEARNING ###
     model, task_loss, topographic_loss = setup_model(arguments)
 
-    optimizer = optim.SGD(model.parameters(),
-                          lr=arguments.learning_rate,
-                          momentum=0.9,
-                          weight_decay=1e-4)
+    optimizer = optim.Adam(model.parameters(), lr=arguments.learning_rate)
     
     logger = tb_logger.Logger(logdir=arguments.tensorboard_folder, flush_secs=2)
 
