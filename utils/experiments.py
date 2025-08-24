@@ -41,18 +41,26 @@ def get_cifar10_eval_loader(
     )
     return loader
 
-def resolve_figure_path(src_path: str) -> str:
+from pathlib import Path
+import re
+
+def resolve_figure_path(src_path: str, experiment: str | None = None) -> str:
     """
     Given a checkpoint path or a model directory path, locate the nearest 'models' ancestor.
-    Then place the figure under the sibling 'figures' folder of that ancestor's parent
-    (i.e., .../ShallowCNN/figures or .../ResNet18/figures) with filename <model_name>.png.
+    Place the figure under the sibling 'figures' folder of that ancestor's parent
+    (e.g., .../ShallowCNN/figures or .../ResNet18/figures) with filename <model_name>.png.
+
+    If `experiment` is provided, the figure is saved in a subfolder:
+        .../figures/<experiment>/<model_name>.png
+    Otherwise it falls back to:
+        .../figures/<model_name>.png
     """
     p = Path(src_path).resolve()
 
     # If src points to a file (e.g., .../ckpt_xxx.pt), use its parent (the model directory).
     model_path = p.parent if p.suffix else p
 
-
+    # Find the nearest ".../models" ancestor
     models_dir = None
     for parent in [model_path] + list(model_path.parents):
         if parent.name == "models":
@@ -60,18 +68,23 @@ def resolve_figure_path(src_path: str) -> str:
             break
 
     if models_dir is None:
-
-        figures_dir = model_path / "figures"
+        figures_root = model_path / "figures"
         model_name = model_path.name
     else:
         arch_dir = models_dir.parent  # e.g., .../ShallowCNN or .../ResNet18
-        figures_dir = arch_dir / "figures"
-
+        figures_root = arch_dir / "figures"
         try:
             rel = model_path.relative_to(models_dir)
             model_name = rel.parts[0]
         except ValueError:
             model_name = model_path.name
+
+    # Optional subfolder per experiment
+    if experiment and experiment.strip():
+        safe_exp = re.sub(r"[^\w.\-]+", "_", experiment.strip())
+        figures_dir = figures_root / safe_exp
+    else:
+        figures_dir = figures_root
 
     figures_dir.mkdir(parents=True, exist_ok=True)
     return str(figures_dir / f"{model_name}.png")

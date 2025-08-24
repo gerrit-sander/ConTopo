@@ -103,7 +103,7 @@ def main():
         fig.colorbar(im, ax=axes[i, 1], fraction=0.046, pad=0.04)
 
     plt.tight_layout()
-    figurepath = resolve_figure_path(src)
+    figurepath = resolve_figure_path(src, experiment="actmaps")
     plt.savefig(figurepath, dpi=200, bbox_inches='tight')
     plt.show()
 
