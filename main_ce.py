@@ -72,11 +72,16 @@ def cifar10_loader(arguments):
     ])
 
     train_transform = transforms.Compose([
-    transforms.RandomResizedCrop(size=32, scale=(0.2, 1.)),
-    transforms.RandomHorizontalFlip(),
-    transforms.ToTensor(),
-    normalize,
+        transforms.ToTensor(),
+        transforms.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))
     ])
+    
+    # train_transform = transforms.Compose([
+    # transforms.RandomResizedCrop(size=32, scale=(0.2, 1.)),
+    # transforms.RandomHorizontalFlip(),
+    # transforms.ToTensor(),
+    # normalize,
+    # ])
 
     train_dataset = datasets.CIFAR10(root=arguments.dataset_folder, transform=train_transform, download=True)
     val_dataset = datasets.CIFAR10(root=arguments.dataset_folder, train=False, download=True, transform=val_transform)

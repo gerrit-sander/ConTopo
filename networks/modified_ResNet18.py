@@ -26,35 +26,8 @@ class Block(nn.Module):
         out = F.relu(out)
         return out
     
-class LastBlockNoReLU(nn.Module):
-    """Variant of Block that omits the final ReLU, exposing pre-activation outputs."""
-    def __init__(self, in_channels, channels, stride=1):
-        super(LastBlockNoReLU, self).__init__()
-
-        self.conv1 = nn.Conv2d(in_channels, channels, kernel_size=3, stride=stride, padding=1, bias=False)
-        self.bn1 = nn.BatchNorm2d(channels)
-        self.conv2 = nn.Conv2d(channels, channels, kernel_size=3, stride=1, padding=1, bias=False)
-        self.bn2 = nn.BatchNorm2d(channels)
-
-        self.shortcut = nn.Sequential()
-        if stride != 1 or in_channels != channels:
-            self.shortcut = nn.Sequential(
-                nn.Conv2d(in_channels, channels, kernel_size=1, stride=stride, bias=False),
-                nn.BatchNorm2d(channels)
-            )
-
-    def forward(self, x):
-        out = F.relu(self.bn1(self.conv1(x)))
-        out = self.bn2(self.conv2(out))
-        out += self.shortcut(x)
-        return out
-    
 class ResNet18(nn.Module):
-    """
-    Basic ResNet18 encoder architecture. To have a quadratic number as output dimension for the
-    topographic constraint, the number of channels is reduced from 512 to 256 in the last layer.
-    Also the final ReLU activation is omitted to expose the pre-activation outputs.
-    """
+    """ Modified ResNet18 architecture for CIFAR-10. In the end there is a single linear layer to get embeddings of specified dimension."""
     def __init__(self, in_channels=3, emb_dim=256):
         super(ResNet18, self).__init__()
 
@@ -64,7 +37,7 @@ class ResNet18(nn.Module):
         self.layer1 = nn.Sequential(Block(64, 64, stride=1), Block(64, 64, stride=1))
         self.layer2 = nn.Sequential(Block(64, 128, stride=2), Block(128, 128, stride=1))
         self.layer3 = nn.Sequential(Block(128, 256, stride=2), Block(256, 256, stride=1))
-        self.layer4 = nn.Sequential(Block(256, emb_dim, stride=2), LastBlockNoReLU(emb_dim, emb_dim, stride=1))
+        self.layer4 = nn.Sequential(Block(256, 512, stride=2), Block(512, 512, stride=1))
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
         self.fc = nn.Linear(emb_dim, emb_dim)
 
