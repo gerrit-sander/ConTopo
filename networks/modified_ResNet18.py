@@ -39,7 +39,7 @@ class ResNet18(nn.Module):
         self.layer3 = nn.Sequential(Block(128, 256, stride=2), Block(256, 256, stride=1))
         self.layer4 = nn.Sequential(Block(256, 512, stride=2), Block(512, 512, stride=1))
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        self.fc = nn.Linear(emb_dim, emb_dim)
+        self.fc = nn.Linear(512, emb_dim)
 
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
