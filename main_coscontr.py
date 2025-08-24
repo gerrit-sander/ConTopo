@@ -102,7 +102,7 @@ def cifar10_loader(arguments):
     )
 
     val_loader = torch.utils.data.DataLoader(
-        val_dataset, batch_size=256, shuffle=False,
+        val_dataset, batch_size=arguments.batch_size, shuffle=False,
         num_workers=8, pin_memory=True)
     
     return train_loader, val_loader
