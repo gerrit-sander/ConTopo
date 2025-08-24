@@ -126,7 +126,7 @@ def setup_model(arguments):
     if arguments.topography_type == 'global':
         topographic_loss = Global_Topographic_Loss(weight=arguments.topographic_loss_lambda, emb_dim=arguments.embedding_dim)
     elif arguments.topography_type == 'ws':
-        topographic_loss = Local_WS_Loss(weight=arguments.topographic_loss_lambda, emb_dim=arguments.embedding_dim)
+        topographic_loss = Local_WS_Loss(weight=arguments.topographic_loss_lambda)
 
     if torch.cuda.is_available():
         if torch.cuda.device_count() > 1:
@@ -162,7 +162,7 @@ def train(train_loader, model, task_loss, topographic_loss, optimizer, epoch, ar
         embeddings, features = model(images)
         task_loss_value = task_loss(features, labels)
         if arguments.topography_type == 'ws':
-            linear_layer = model.module.fc if isinstance(model, torch.nn.DataParallel) else model.fc
+            linear_layer = model.encoder.module.fc if isinstance(model, torch.nn.DataParallel) else model.encoder.fc
             topographic_loss_value = topographic_loss(linear_layer=linear_layer)
         elif arguments.topography_type == 'global':
             topographic_loss_value = topographic_loss(embeddings)
