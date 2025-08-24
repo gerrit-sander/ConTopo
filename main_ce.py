@@ -41,13 +41,15 @@ def parse_arguments():
     arguments.save_freq = max(1, arguments.epochs // 10)  # Save every 10% of epochs, rounded up
     arguments.num_classes = 10  # CIFAR-10 has 10 classes
 
-    arguments.model_name = 'crossentropy_{}embdims_{}lambda_{}epochs_{}bsz_{}nwork_{}lr'.format(
+    arguments.model_name = 'crossentropy_{}topo_{}embdims_{}lambda_{}epochs_{}bsz_{}nwork_{}lr_{}dropout'.format(
+        arguments.topography_type,
         arguments.embedding_dim,
         arguments.topographic_loss_lambda, 
         arguments.epochs,
         arguments.batch_size,
         arguments.num_workers,
         arguments.learning_rate,
+        arguments.p_dropout if arguments.use_dropout else 0.0,
     )
 
     arguments.tensorboard_folder = os.path.join(arguments.tensorboard_folder, arguments.model_name)

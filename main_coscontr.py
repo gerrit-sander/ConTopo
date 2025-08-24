@@ -44,7 +44,8 @@ def parse_arguments():
     arguments.dataset_folder = './dataset'
     arguments.save_freq = max(1, arguments.epochs // 10)  # Save every 10% of epochs, rounded up
 
-    arguments.model_name = 'coscontr_{}embdims_{}projdims_{}lambda_{}epochs_{}bsz_nwork{}_readep{}_lr{}_margsame{}_margdiff{}'.format(
+    arguments.model_name = 'coscontr_{}topo_{}embdims_{}projdims_{}lambda_{}epochs_{}bsz_nwork{}_readep{}_lr{}_margsame{}_margdiff{}_{}dropout'.format(
+        arguments.topography_type,
         arguments.embedding_dim, 
         arguments.projection_dim, 
         arguments.topographic_loss_lambda, 
@@ -55,6 +56,7 @@ def parse_arguments():
         arguments.learning_rate,
         arguments.margin_same,
         arguments.margin_diff,
+        arguments.p_dropout if arguments.use_dropout else 0.0,
     )
 
     arguments.tensorboard_folder = os.path.join(arguments.tensorboard_folder, arguments.model_name)
