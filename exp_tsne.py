@@ -35,14 +35,12 @@ def main():
     np.random.seed(42)
 
     target_samples = 2000
-    feats = []
-    labs_all = []
+    feats, labs_all = [], []
 
     with torch.no_grad():
         for imgs, labs in val_loader:
             if len(labs_all) >= target_samples:
                 break
-
             imgs = imgs.to(device, non_blocking=True)
             out = encoder(imgs)
             if out.ndim > 2:
@@ -53,7 +51,6 @@ def main():
             if out.size(0) > remaining:
                 out = out[:remaining]
                 labs = labs[:remaining]
-
             feats.append(out)
             labs_all.extend(labs.tolist())
 
@@ -61,28 +58,27 @@ def main():
         raise RuntimeError("No embeddings collected from the eval loader.")
     X = torch.cat(feats, dim=0).numpy()
     y = np.array(labs_all)
-    print(f"[tSNE] Collected {X.shape[0]} embeddings with dim {X.shape[1]}.")
 
     tsne = TSNE(n_components=2, random_state=42)
     X2 = tsne.fit_transform(X)
 
-    # Plot
     plt.figure(figsize=(10, 8))
     colors = ['b', 'g', 'r', 'c', 'm', 'y', 'k', 'purple', 'orange', 'brown']
     for i in range(10):
         idx = (y == i)
         if idx.any():
+
             plt.scatter(
                 X2[idx, 0], X2[idx, 1],
-                c=colors[i], s=8, alpha=0.8,
+                c=colors[i],
                 label=class_names[i] if i < len(class_names) else f"class {i}"
             )
 
-    plt.title('t-SNE Visualization of Encoder Feature Space (CIFAR-10 eval, 2000 samples)')
+    plt.title('t-SNE Visualization of Feature Space (CIFAR-10 eval, 2000 samples)')
     plt.xlabel('t-SNE Dimension 1')
     plt.ylabel('t-SNE Dimension 2')
-    plt.legend(markerscale=2, fontsize=9, frameon=True)
-    plt.grid(True, linewidth=0.3, alpha=0.5)
+    plt.legend()
+    plt.grid(True)
 
     plt.tight_layout()
     figurepath = resolve_figure_path(src, experiment="tsne")
