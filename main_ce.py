@@ -4,9 +4,8 @@ from torchvision import datasets
 from utils.train import AverageMeter, save_checkpoint, unwrap, accuracy, tb_logger
 import torch
 import torch.backends.cudnn as cudnn
-from networks.shallowCNN import LinearShallowCNN, LinearClassifier
+from networks.shallowCNN import LinearShallowCNN
 from networks.modified_ResNet18 import LinearResNet18
-from losses.cosine_contrastive import CosineContrastiveLoss
 from losses.topographic import Global_Topographic_Loss, Local_WS_Loss
 import time
 import os

@@ -31,7 +31,7 @@ def parse_arguments():
     parser.add_argument('--margin_same', type=float, default=0.3, help='margin for same animacy pairs in cosine contrastive loss')
     parser.add_argument('--margin_diff', type=float, default=0.5, help='margin for different animacy pairs in cosine contrastive loss')
     parser.add_argument('--projection_dim', type=int, default=128, help='dimension of the projection head for contrastive learning')
-    parser.add_argument('--topographic_loss_lambda', type=float, default=1.0, help='weight for the topographic loss')
+    parser.add_argument('--topographic_loss_lambda', type=float, default=0.02, help='weight for the topographic loss')
     parser.add_argument('--use_dropout', action='store_true', help='use dropout in the projection head (if applicable)')
     parser.add_argument('--p_dropout', type=float, default=0.5, help='dropout probability (if applicable)')
     parser.add_argument('topography_type', type=str, choices=['global', 'ws'], help='type of topographic loss to use')

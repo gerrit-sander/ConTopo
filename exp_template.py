@@ -1,7 +1,3 @@
-import argparse
-import os
-import torch
-
 from utils.load import load_encoder_from_path, parse_model_load_args
 from utils.experiments import get_cifar10_eval_loader, resolve_figure_path
 from utils.train import load_cifar10_metadata
