@@ -50,15 +50,14 @@ class LinearShallowCNN(nn.Module):
     """ ShallowCNN architecture with a linear layer at the end for classification tasks."""
     def __init__(self, emb_dim=256, num_classes=10, p_dropout=0.2, use_dropout=True, ret_emb=False):
         super(LinearShallowCNN, self).__init__()
-        if use_dropout or p_dropout > 0:
-            print(f"Warning: Dropout in the cross entropy model is not implemented and will be ignored.")
         self.ret_emb = ret_emb
         self.encoder = ShallowCNN(emb_dim=emb_dim)
+        self.dropout = nn.Dropout(p_dropout) if use_dropout else nn.Identity()
         self.fc = nn.Linear(emb_dim, num_classes)
     
     def forward(self, x):
         embeddings = self.encoder(x)
-        logits = self.fc(embeddings)
+        logits = self.fc(self.dropout(embeddings))
         return (embeddings, logits) if self.ret_emb else logits
 
 

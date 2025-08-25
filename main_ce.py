@@ -19,18 +19,18 @@ def parse_arguments():
 
     # General settings
     parser.add_argument('--print_freq', type=int, default=10, help='print frequency')
-    parser.add_argument('--epochs', type=int, default=1000, help='number of epochs to train')
-    parser.add_argument('--batch_size', type=int, default=256, help='batch size for training')
+    parser.add_argument('--epochs', type=int, default=30, help='number of epochs to train')
+    parser.add_argument('--batch_size', type=int, default=64, help='batch size for training')
     parser.add_argument('--num_workers', type=int, default=2, help='number of workers for data loading')
-    parser.add_argument('--learning_rate', type=float, default=0.05, help='learning rate')
+    parser.add_argument('--learning_rate', type=float, default=0.001, help='learning rate')
     parser.add_argument('model_type', type=str, choices=['shallowcnn', 'resnet18'], help='type of model to use')
     parser.add_argument('--use_dropout', action='store_true', help='use dropout in the projection head (if applicable)')
-    parser.add_argument('--p_dropout', type=float, default=0.0, help='dropout probability (if applicable)')
+    parser.add_argument('--p_dropout', type=float, default=0.5, help='dropout probability (if applicable)')
     parser.add_argument('topography_type', type=str, choices=['global', 'ws'], help='type of topographic loss to use')
     
     # Loss and model parameters
     parser.add_argument('--embedding_dim', type=int, default=256, help='dimension of the embedding space')
-    parser.add_argument('--topographic_loss_lambda', type=float, default=1.0, help='weight for the topographic loss')
+    parser.add_argument('--topographic_loss_lambda', type=float, default=0.1, help='weight for the topographic loss')
 
     arguments = parser.parse_args()
 
@@ -70,18 +70,13 @@ def cifar10_loader(arguments):
         transforms.ToTensor(),
         normalize,
     ])
-
-    train_transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))
-    ])
     
-    # train_transform = transforms.Compose([
-    # transforms.RandomResizedCrop(size=32, scale=(0.2, 1.)),
-    # transforms.RandomHorizontalFlip(),
-    # transforms.ToTensor(),
-    # normalize,
-    # ])
+    train_transform = transforms.Compose([
+    transforms.RandomResizedCrop(size=32, scale=(0.2, 1.)),
+    transforms.RandomHorizontalFlip(),
+    transforms.ToTensor(),
+    normalize,
+    ])
 
     train_dataset = datasets.CIFAR10(root=arguments.dataset_folder, transform=train_transform, download=True)
     val_dataset = datasets.CIFAR10(root=arguments.dataset_folder, train=False, download=True, transform=val_transform)

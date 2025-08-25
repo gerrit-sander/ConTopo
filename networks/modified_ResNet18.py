@@ -79,13 +79,14 @@ class ProjectionResNet18(nn.Module):
 
 class LinearResNet18(nn.Module):
     """ResNet18 architecture with a linear layer at the end for classification tasks."""
-    def __init__(self, emb_dim=256, num_classes=10, ret_emb=False):
+    def __init__(self, emb_dim=256, num_classes=10, p_dropout=0.2, use_dropout=True, ret_emb=False):
         super(LinearResNet18, self).__init__()
         self.ret_emb = ret_emb
         self.encoder = ResNet18(emb_dim=emb_dim)
+        self.dropout = nn.Dropout(p_dropout) if use_dropout else nn.Identity()
         self.fc = nn.Linear(emb_dim, num_classes)
 
     def forward(self, x):
         embeddings = self.encoder(x)
-        logits = self.fc(embeddings)
+        logits = self.fc(self.dropout(embeddings))
         return (embeddings, logits) if self.ret_emb else logits
