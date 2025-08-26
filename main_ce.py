@@ -30,6 +30,7 @@ def parse_arguments():
     # Loss and model parameters
     parser.add_argument('--embedding_dim', type=int, default=256, help='dimension of the embedding space')
     parser.add_argument('--topographic_loss_lambda', type=float, default=0.1, help='weight for the topographic loss')
+    parser.add_argument('--trial', type=int, default=0, help='trial number for multiple runs (used in naming folders)')
 
     arguments = parser.parse_args()
 
@@ -40,7 +41,7 @@ def parse_arguments():
     arguments.save_freq = max(1, arguments.epochs // 10)  # Save every 10% of epochs, rounded up
     arguments.num_classes = 10  # CIFAR-10 has 10 classes
 
-    arguments.model_name = 'crossentropy_{}topo_{}embdims_{}lambda_{}epochs_{}bsz_{}nwork_{}lr_{}dropout'.format(
+    arguments.model_name = 'crossentropy_{}topo_{}embdims_{}lambda_{}epochs_{}bsz_{}nwork_{}lr_{}dropout_trial{}'.format(
         arguments.topography_type,
         arguments.embedding_dim,
         arguments.topographic_loss_lambda, 
@@ -49,6 +50,7 @@ def parse_arguments():
         arguments.num_workers,
         arguments.learning_rate,
         arguments.p_dropout if arguments.use_dropout else 0.0,
+        arguments.trial
     )
 
     arguments.tensorboard_folder = os.path.join(arguments.tensorboard_folder, arguments.model_name)

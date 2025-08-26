@@ -35,6 +35,7 @@ def parse_arguments():
     parser.add_argument('--use_dropout', action='store_true', help='use dropout in the projection head (if applicable)')
     parser.add_argument('--p_dropout', type=float, default=0.5, help='dropout probability (if applicable)')
     parser.add_argument('topography_type', type=str, choices=['global', 'ws'], help='type of topographic loss to use')
+    parser.add_argument('--trial', type=int, default=0, help='trial number for multiple runs (used in naming folders)')
 
     arguments = parser.parse_args()
 
@@ -44,7 +45,7 @@ def parse_arguments():
     arguments.dataset_folder = './dataset'
     arguments.save_freq = max(1, arguments.epochs // 10)  # Save every 10% of epochs, rounded up
 
-    arguments.model_name = 'coscontr_{}topo_{}embdims_{}projdims_{}lambda_{}epochs_{}bsz_nwork{}_readep{}_lr{}_margsame{}_margdiff{}_{}dropout'.format(
+    arguments.model_name = 'coscontr_{}topo_{}embdims_{}projdims_{}lambda_{}epochs_{}bsz_nwork{}_readep{}_lr{}_margsame{}_margdiff{}_{}dropout_trial{}'.format(
         arguments.topography_type,
         arguments.embedding_dim, 
         arguments.projection_dim, 
@@ -57,6 +58,7 @@ def parse_arguments():
         arguments.margin_same,
         arguments.margin_diff,
         arguments.p_dropout if arguments.use_dropout else 0.0,
+        arguments.trial
     )
 
     arguments.tensorboard_folder = os.path.join(arguments.tensorboard_folder, arguments.model_name)
