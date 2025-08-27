@@ -151,17 +151,23 @@ def train(train_loader, model, task_loss, topographic_loss, optimizer, epoch, ar
     task_losses = AverageMeter()
     data_time = AverageMeter()
 
+    # Dynamic loss balancing:
+    # - 0 < rho < 1  → task loss dominates
+    # - rho = 1      → equal weight
+    # - rho > 1      → topographic loss dominates
+    # eps avoids div-by-zero; beta is EMA smoothing for lambda_hat
     rho = arguments.topographic_loss_rho     
     beta = 0.1
     eps = 1e-8
     lambda_max = 1e4
-    lambda_hat = None
+    lambda_hat = None  # smoothed scale for topo loss
 
     end = time.time()
 
     for idx, (images, labels) in enumerate(train_loader):
         data_time.update(time.time() - end)
 
+        # merge the two augmented views along batch dim → (2*B, C, H, W)
         images = torch.cat([images[0], images[1]], dim=0)
 
         device = next(model.parameters()).device
@@ -169,10 +175,14 @@ def train(train_loader, model, task_loss, topographic_loss, optimizer, epoch, ar
         labels = labels.to(device, non_blocking=True)
         bsz = labels.shape[0]
 
+        # forward through encoder + projection head
         embeddings, features = model(images)
+
+        # reshape features to (B, 2, feat_dim) for SupCon/SimCLR
         f1, f2 = torch.split(features, [bsz, bsz], dim=0)
         features = torch.cat([f1.unsqueeze(1), f2.unsqueeze(1)], dim=1)
 
+        # task loss: supervised contrastive or SimCLR variant
         if arguments.task_method == 'supcon':
             task_loss_value = task_loss(features, labels)
         elif arguments.task_method == 'simclr':
@@ -180,6 +190,7 @@ def train(train_loader, model, task_loss, topographic_loss, optimizer, epoch, ar
         else:
             raise ValueError(f"Unknown task method: {arguments.task_method}")
 
+        # topographic term: local WS acts on final linear layer; global acts on embeddings
         if arguments.topography_type == 'ws':
             base = unwrap(model)
             linear_layer = base.encoder.fc
@@ -192,30 +203,35 @@ def train(train_loader, model, task_loss, topographic_loss, optimizer, epoch, ar
             else:
                 measure_params = [p for p in model.encoder.parameters() if p.requires_grad]
         else:
-            measure_params = [p for p in model.parameters() if p.requires_grad]
+            measure_params = [p for p in model.parameters() if p.requires_grad]  # fallback
 
+        # gradient-norm matching to set lambda
         nt = grad_norm(task_loss_value, measure_params)
         np_ = grad_norm(topographic_loss_value, measure_params)
         target_lambda = (rho * nt / (np_ + eps)).clamp(0.0, lambda_max).detach()
         if lambda_hat is None:
             lambda_hat = target_lambda
         else:
-            lambda_hat = (1 - beta) * lambda_hat + beta * target_lambda
+            lambda_hat = (1 - beta) * lambda_hat + beta * target_lambda  # EMA smoothing
 
+        # combined objective
         loss = task_loss_value + lambda_hat.detach() * topographic_loss_value
 
+        # update meters
         losses.update(loss.item(), bsz)
         task_losses.update(task_loss_value.item(), bsz)
         topographic_losses.update(topographic_loss_value.item(), bsz)
 
+        # standard optimization step
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
 
+        # timing
         batch_time.update(time.time() - end)
         end = time.time()
 
-        # print info
+        # periodic log (includes current smoothed lambda)
         if (idx + 1) % arguments.print_freq == 0:
             lam_val = float(lambda_hat.detach().cpu()) if lambda_hat is not None else 1.0
             print(f'Epoch: [{epoch}][{idx + 1}/{len(train_loader)}]\t'
@@ -236,7 +252,7 @@ def validate(val_loader, model, criterion, arguments):
     losses = AverageMeter()
     acc = AverageMeter()
 
-    with torch.no_grad():
+    with torch.no_grad():  # eval without grads
         end = time.time()
         for idx, (images, labels) in enumerate(val_loader):
             device = next(model.parameters()).device
@@ -244,21 +260,22 @@ def validate(val_loader, model, criterion, arguments):
             labels = labels.to(device, non_blocking=True)
             bsz = labels.shape[0]
 
-            # forward
+            # forward and compute loss
             output = model(images)
             loss = criterion(output, labels)
 
-            # update metric
+            # update loss/accuracy meters
             losses.update(loss.item(), bsz)
             _, predicted = output.max(1)
             correct = predicted.eq(labels).sum().item()
             acc_value = correct / bsz
             acc.update(acc_value, bsz)
 
-            # measure elapsed time
+            # time bookkeeping
             batch_time.update(time.time() - end)
             end = time.time()
 
+            # periodic validation log
             if idx % arguments.print_freq == 0:
                 print('Test: [{0}/{1}]\t'
                       'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
@@ -297,7 +314,7 @@ def main():
         logger.log_value('topographic_loss', avg_topoloss, epoch)
 
         # ------ CONTRASTIVE CHECKPOINTS ------
-        # Save periodic checkpoint
+        # Periodic full snapshot (encoder + optimizer + metrics)
         if (epoch % arguments.save_freq) == 0:
             state = {
                 'stage': 'contrastive',
@@ -314,7 +331,7 @@ def main():
             ckpt_path = os.path.join(arguments.model_folder, f'contrastive_epoch{epoch:04d}.pth')
             save_checkpoint(ckpt_path, state)
 
-        # Save best-by-total-loss checkpoint
+        # Track best model by lowest total loss
         if avg_loss < best_contrastive_loss:
             best_contrastive_loss = avg_loss
             best_state = {
@@ -332,7 +349,7 @@ def main():
             best_path = os.path.join(arguments.model_folder, 'contrastive_best.pth')
             save_checkpoint(best_path, best_state)
 
-    # Always save a final "last" snapshot for contrastive stage
+    # Always save the last contrastive snapshot (for resuming)
     final_contrastive = {
         'stage': 'contrastive',
         'epoch': arguments.epochs,
@@ -343,7 +360,7 @@ def main():
     save_checkpoint(os.path.join(arguments.model_folder, 'contrastive_last.pth'), final_contrastive)
 
     ### LINEAR READOUT TRAINING ###
-    # Freeze the pretrained encoder and set it to eval mode
+    # Freeze the pretrained encoder; keep it in eval for stable features
     for p in model.parameters():
         p.requires_grad = False
     unwrap(model).eval()  # safely puts underlying module in eval, even if DataParallel
@@ -358,6 +375,7 @@ def main():
             self.encoder = encoder
             self.classifier = classifier
         def forward(self, x):
+            # cache-free forward: encoder frozen, grads disabled
             with torch.no_grad():
                 embeddings, _ = self.encoder(x)
             logits = self.classifier(embeddings)
@@ -402,6 +420,7 @@ def main():
             bsz = labels.size(0)
             train_loss_meter.update(loss.item(), bsz)
 
+            # periodic readout training log
             if (idx + 1) % arguments.print_freq == 0:
                 print(f'[Linear] Epoch: [{epoch}][{idx + 1}/{len(train_loader)}]\t'
                       f'Loss {train_loss_meter.val:.4f} ({train_loss_meter.avg:.4f})')
@@ -410,7 +429,7 @@ def main():
         print(f'[Linear] epoch {epoch}, train loss {train_loss_meter.avg:.4f}')
         logger.log_value('linear_readout_train_loss', train_loss_meter.avg, epoch)
 
-        # Validation
+        # Validation of linear head on frozen features
         val_loss, val_acc = validate(val_loader, readout_model, criterion_ce, arguments)
         last_val_acc = val_acc
         logger.log_value('linear_readout_val_loss', val_loss, epoch)
@@ -431,7 +450,7 @@ def main():
                 readout_state
             )
 
-        # Best-by-val-acc checkpoint for the linear head
+        # Keep the best linear head by highest validation accuracy
         if val_acc > best_val_acc:
             best_val_acc = val_acc
             best_readout_state = {
@@ -447,7 +466,7 @@ def main():
                 best_readout_state
             )
 
-    # Always save a final "last" snapshot for the linear head
+    # Always save the final linear head snapshot
     save_checkpoint(
         os.path.join(arguments.model_folder, 'readout_last.pth'),
         {

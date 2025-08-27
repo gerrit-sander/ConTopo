@@ -28,7 +28,6 @@ def parse_arguments():
     # Optimization settings
     parser.add_argument('--epochs', type=int, default=30, help='number of epochs to train')
     parser.add_argument('--batch_size', type=int, default=64, help='batch size for training')
-    parser.add_argument('--readout_epochs', type=int, default=20, help='number of epochs for readout training')
     parser.add_argument('--learning_rate', type=float, default=0.001, help='learning rate')
 
     # Model Settings
@@ -133,7 +132,7 @@ def setup_model(arguments):
     return model, task_loss, topographic_loss
 
 def train(train_loader, model, task_loss, topographic_loss, optimizer, epoch, arguments):
-    model.train()
+    model.train()  # training mode
     
     batch_time = AverageMeter()
     losses = AverageMeter()
@@ -142,30 +141,41 @@ def train(train_loader, model, task_loss, topographic_loss, optimizer, epoch, ar
     data_time = AverageMeter()
     acc = AverageMeter()
 
+    # Dynamic loss balancing:
+    # - 0 < rho < 1  → task loss dominates
+    # - rho = 1      → equal weighting
+    # - rho > 1      → topographic loss dominates
+    # eps avoids div-by-zero; beta is EMA factor for lambda_hat
     rho = arguments.topographic_loss_rho    
     beta = 0.1
     eps = 1e-8
     lambda_max = 1e4
-    lambda_hat = None
+    lambda_hat = None  # smoothed scale for topo loss
 
     end = time.time()
 
     for idx, (images, labels) in enumerate(train_loader):
-        data_time.update(time.time() - end)
+        data_time.update(time.time() - end)  # data loading time
 
         device = next(model.parameters()).device
         images = images.to(device, non_blocking=True)
         labels = labels.to(device, non_blocking=True)
         bsz = labels.shape[0]
 
+        # forward: encoder returns embeddings and logits
         embeddings, features = model(images)
+
+        # task loss on logits
         task_loss_value = task_loss(features, labels)
         
+        # topographic term + parameters used for grad-norm measurement
         if arguments.topography_type == 'ws':
+            # local WS loss acts on the final linear classifier
             linear_layer = model.encoder.module.fc if isinstance(model, torch.nn.DataParallel) else model.encoder.fc
             topographic_loss_value = topographic_loss(linear_layer=linear_layer)
             measure_params = list(linear_layer.parameters())
         elif arguments.topography_type == 'global':
+            # global topo loss acts on embeddings
             topographic_loss_value = topographic_loss(embeddings)
             if isinstance(model, torch.nn.DataParallel):
                 measure_params = [p for p in model.encoder.module.parameters() if p.requires_grad]
@@ -174,32 +184,37 @@ def train(train_loader, model, task_loss, topographic_loss, optimizer, epoch, ar
         else:
             measure_params = [p for p in model.parameters() if p.requires_grad]
 
+        # Grad-norm matching: scale topo loss to task loss magnitude
         nt = grad_norm(task_loss_value, measure_params)
         np_ = grad_norm(topographic_loss_value, measure_params)
         target_lambda = (rho * nt / (np_ + eps)).clamp(0.0, lambda_max).detach()
         if lambda_hat is None:
             lambda_hat = target_lambda
         else:
-            lambda_hat = (1 - beta) * lambda_hat + beta * target_lambda
+            lambda_hat = (1 - beta) * lambda_hat + beta * target_lambda  # smooth scaling
 
+        # combined objective
         loss = task_loss_value + lambda_hat.detach() * topographic_loss_value
 
+        # meters
         losses.update(loss.item(), bsz)
         task_losses.update(task_loss_value.item(), bsz)
         topographic_losses.update(topographic_loss_value.item(), bsz)
 
-        # compute and update top-1 accuracy (in %)
+        # compute top-1 accuracy (%) on logits
         acc1 = accuracy(features, labels, topk=(1,))[0]
         acc.update(acc1.item() if hasattr(acc1, "item") else float(acc1), bsz)
 
+        # standard optimization step
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
 
+        # timings
         batch_time.update(time.time() - end)
         end = time.time()
 
-        # print info
+        # periodic training log (shows current and running averages + lambda)
         if (idx + 1) % arguments.print_freq == 0:
             lam_val = float(lambda_hat.detach().cpu()) if lambda_hat is not None else 1.0
             print(f'Epoch: [{epoch}][{idx + 1}/{len(train_loader)}]\t'
@@ -215,13 +230,13 @@ def train(train_loader, model, task_loss, topographic_loss, optimizer, epoch, ar
     return losses.avg, topographic_losses.avg, task_losses.avg
 
 def validate(val_loader, model, criterion, arguments):
-    model.eval()
+    model.eval()  # eval mode
 
     batch_time = AverageMeter()
     losses = AverageMeter()
     acc = AverageMeter()
 
-    with torch.no_grad():
+    with torch.no_grad():  # no grads during evaluation
         end = time.time()
         for idx, (images, labels) in enumerate(val_loader):
             device = next(model.parameters()).device
@@ -229,11 +244,11 @@ def validate(val_loader, model, criterion, arguments):
             labels = labels.to(device, non_blocking=True)
             bsz = labels.shape[0]
 
-            # forward
+            # forward + CE loss on logits
             output = model(images)
             loss = criterion(output, labels)
 
-            # update metric
+            # update loss and accuracy
             losses.update(loss.item(), bsz)
             _, predicted = output.max(1)
             correct = predicted.eq(labels).sum().item()
@@ -244,6 +259,7 @@ def validate(val_loader, model, criterion, arguments):
             batch_time.update(time.time() - end)
             end = time.time()
 
+            # periodic validation log
             if idx % arguments.print_freq == 0:
                 print('Test: [{0}/{1}]\t'
                       'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
@@ -266,11 +282,11 @@ def main():
 
     logger = tb_logger.Logger(logdir=arguments.tensorboard_folder, flush_secs=2)
 
-    # We'll track the best model by validation accuracy
+    # Track best model by validation accuracy
     best_val_acc = 0.0
     last_val_acc = 0.0
 
-    # Helper that makes the model return logits only (validate() expects logits)
+    # Adapter that makes the model return logits only (validate() expects logits)
     class LogitsOnly(torch.nn.Module):
         def __init__(self, model):
             super().__init__()
@@ -285,7 +301,7 @@ def main():
 
     for epoch in range(1, arguments.epochs + 1):
         time1 = time.time()
-        # Train end-to-end with CE (plus optional topographic loss inside train())
+        # Train end-to-end with CE; topo term handled inside train()
         avg_loss, avg_topoloss, avg_taskloss = train(
             train_loader, model, task_loss, topographic_loss, optimizer, epoch, arguments
         )
@@ -303,7 +319,7 @@ def main():
         logger.log_value('val_loss', val_loss, epoch)
         logger.log_value('val_acc', val_acc, epoch)
 
-        # Save periodic checkpoint
+        # Save periodic checkpoint (model + optimizer + metrics)
         if (epoch % arguments.save_freq) == 0:
             state = {
                 'stage': 'e2e',
@@ -322,7 +338,7 @@ def main():
             ckpt_path = os.path.join(arguments.model_folder, f'e2e_epoch{epoch:04d}.pth')
             save_checkpoint(ckpt_path, state)
 
-        # Save best-by-validation-accuracy checkpoint
+        # Save best checkpoint by validation accuracy
         if val_acc > best_val_acc:
             best_val_acc = val_acc
             best_state = {
@@ -342,7 +358,7 @@ def main():
             best_path = os.path.join(arguments.model_folder, 'e2e_best.pth')
             save_checkpoint(best_path, best_state)
 
-    # Always save a final "last" snapshot for e2e training
+    # Always save a final "last" snapshot for e2e training (for resume/export)
     final_e2e = {
         'stage': 'e2e',
         'epoch': arguments.epochs,

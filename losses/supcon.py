@@ -3,8 +3,7 @@ SupCon (Supervised Contrastive) Loss.
 
 References
 ----------
-Khosla, P., Teterwak, P., Wang, C., Sarna, A., Tian, Y., Isola, P., Maschinot, A., Liu, C., & Krishnan, D.
-"Supervised Contrastive Learning." arXiv:2004.11362 (2020).
+Khosla, P., Teterwak, P., Wang, C., Sarna, A., Tian, Y., Isola, P., ... & Krishnan, D. (2020). Supervised contrastive learning. Advances in neural information processing systems, 33, 18661-18673.
 GitHub reference implementation: https://github.com/HobbitLong/SupContrast
 
 BibTeX

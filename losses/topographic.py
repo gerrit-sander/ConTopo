@@ -5,8 +5,8 @@ import torch.nn.functional as F
 
 def get_grid_shape(n_units):
     """
-    Calculate a grid size (h, w) for a given number of units.
-    The grid is chosen such that h * w = n_units and h is as close to w as possible.
+    Choose (h, w) such that h * w == n_units and h is as close to w as possible.
+    Returns a compact grid layout for arranging units.
     """
     h = int(math.sqrt(n_units))
     while n_units % h != 0:
@@ -16,10 +16,9 @@ def get_grid_shape(n_units):
 
 def pos_dist(embedding_dim):
         """
-        Generate a distance matrix for the positions in a grid of shape determined by embedding_dim. 
-        (i,j) of D indicates the distance between units i and j.
-        The grid is created such that the positions are evenly spaced in a 2D plane.
-        The distance matrix is computed using the Euclidean distance.
+        Build a pairwise Euclidean distance matrix D for a 2D grid with
+        embedding_dim cells arranged as close to square as possible.
+        D[i, j] is the distance between grid positions of units i and j.
         """
         h, w = get_grid_shape(embedding_dim)
         y = torch.linspace(0, 1, steps=h)
@@ -32,10 +31,10 @@ def pos_dist(embedding_dim):
 
 class Global_Topographic_Loss(nn.Module):
     """
-    Global topographic loss based on the cosine similarity of the pre-activation features.
-    The loss encourages the cosine similarity between units to be inversely proportional to their distance in a
-    precomputed distance matrix D.
-    The distance matrix D is computed internally in __init__ using the pos_dist function with emb_dim.
+    Global topographic regularizer on pre-activation features.
+    Encourages cosine similarity between unit activations to decay with spatial distance:
+      target_ij ≈ 1 / (d_ij + 1)
+    where d_ij comes from a fixed grid-based distance matrix computed at init.
     """
     def __init__(self, weight=1.0, emb_dim=256):
         super(Global_Topographic_Loss, self).__init__()
@@ -48,7 +47,7 @@ class Global_Topographic_Loss(nn.Module):
         if pre_relu.dim() != 2:
             raise ValueError(f"pre_relu must be 2D [B, C], got shape {tuple(pre_relu.shape)}")
 
-        # Ensure D is on the same device as inputs
+        # Keep D on the same device as inputs
         self.D = self.D.to(pre_relu.device)
 
         _, n_units = pre_relu.shape
@@ -56,26 +55,26 @@ class Global_Topographic_Loss(nn.Module):
         if self.D.shape != (n_units, n_units):
             raise ValueError(f"D must have shape ({n_units}, {n_units}), got {tuple(self.D.shape)}")
 
-        # Cosine similarity between units (columns)
-        Xn = F.normalize(pre_relu, p=2, dim=0, eps=1e-12)  # [B, C]
-        S = Xn.t() @ Xn                                    # (C, C)
+        # Cosine similarity across units (columns)
+        Xn = F.normalize(pre_relu, p=2, dim=0, eps=1e-12)  # [B, C], L2-normalize per unit
+        S = Xn.t() @ Xn                                    # (C, C) cosine sim matrix
 
+        # Use upper triangle (i<j) to avoid double-counting/self-pairs
         i_idx, j_idx = torch.triu_indices(
             n_units, n_units, offset=1, device=pre_relu.device
         )
         d = self.D[i_idx, j_idx]
         s = S[i_idx, j_idx]
 
+        # Quadratic penalty towards 1/(d+1); average over unordered pairs
         topo_loss_val = ((s - (1.0 / (d + 1.0))) ** 2).sum()
         return self.weight * (2.0 / (n_units * (n_units - 1))) * topo_loss_val
     
 class Local_WS_Loss(nn.Module):
     """
-    Local topographic loss based on the weight matrix of a linear layer.
-    The loss encourages the weights to have a topographic structure by minimizing the differences
-    between neighboring weights in a grid-like structure.
-    The grid is determined by the shape of the weight matrix.
-    The loss is computed as the average L2 distance between neighboring weights.
+    Local weight-smoothing regularizer for a linear layer.
+    Arrange output units on a grid and penalize differences between
+    neighboring rows of the weight matrix (right/down/diagonals).
     """
     def __init__(self, weight=1.0):
         super(Local_WS_Loss, self).__init__()
@@ -93,26 +92,27 @@ class Local_WS_Loss(nn.Module):
         if W.ndim != 2:
             raise ValueError("linear_layer must have 2 dimensions (out_feats, in_feats).")
         
+        # Arrange output units on a (h, w) grid; each cell has in_feats weights
         h, w = get_grid_shape(out_feats) # (h, w)
         G = W.reshape(h, w, in_feats) # (h, w, in_feats)
         diffs = []
-        # right
+        # Horizontal neighbors
         if w > 1:
             diffs.append(G[:, :-1, :] - G[:, 1:, :])          # (H, W-1, C)
-        # down
+        # Vertical neighbors
         if h > 1:
             diffs.append(G[:-1, :, :] - G[1:, :, :])          # (H-1, W, C)
-        # down-right
+        # Diagonal down-right
         if h > 1 and w > 1:
             diffs.append(G[:-1, :-1, :] - G[1:, 1:, :])       # (H-1, W-1, C)
-        # down-left
+        # Diagonal down-left
         if h > 1 and w > 1:
             diffs.append(G[:-1, 1:, :] - G[1:, :-1, :])       # (H-1, W-1, C)
 
         if not diffs:
             return torch.zeros((), device=W.device, dtype=W.dtype)
 
-        # L2 distance across the feature dimension, then average over all pairs
+        # L2 over feature dim, then mean over all neighbor pairs
         dists = [torch.linalg.norm(d, dim=-1) for d in diffs]
         topo_loss_val = torch.cat([x.reshape(-1) for x in dists]).mean()
 

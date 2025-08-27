@@ -4,9 +4,11 @@ import torch.nn.functional as F
 
 def prepare_pairs(batch_size, embeddings, device, labels, superclass, superclass_mapping, classnames):
     """
-    Prepare pairs of embeddings and their corresponding labels for contrastive loss computation.
-    This function generates pairs of embeddings based on their labels and animacy classes.
-    It returns the true labels for the pairs, the pairs themselves, and animacy labels.
+    Build all unordered pairs from a batch.
+    Each pair gets:
+      - y_true: 1 if same class, else 0
+      - animacy labels: mapped superclass IDs for each item
+      - pairs: stacked embeddings shaped [num_pairs, 2, D]
     """
     if embeddings.dim() != 2:
         raise ValueError(f"'embeddings' must be 2D [B, D], got {tuple(embeddings.shape)}")
@@ -24,8 +26,10 @@ def prepare_pairs(batch_size, embeddings, device, labels, superclass, superclass
 
     for i in range(batch_size):
         for j in range(i + 1, batch_size):
+            # 1 if same class, 0 otherwise
             y_true.append(1 if labels[i].item() == labels[j].item() else 0)
 
+            # Map class → superclass → integer ID (animacy)
             cls_i = classnames[labels[i].item()]
             cls_j = classnames[labels[j].item()]
             animacy_labels.append([
@@ -33,8 +37,10 @@ def prepare_pairs(batch_size, embeddings, device, labels, superclass, superclass
                 superclass_mapping[superclass[cls_j]],
             ])
 
+            # Pair of embeddings: [2, D]
             pairs.append(torch.stack([embeddings[i], embeddings[j]]))  # [2, D]
 
+    # Tensorize and keep shapes explicit
     y_true = torch.tensor(y_true, dtype=torch.float32, device=device)
     animacy_labels = torch.tensor(animacy_labels, dtype=torch.int32, device=device)
     pairs = torch.stack(pairs)  # [num_pairs, 2, D]
@@ -44,11 +50,10 @@ def prepare_pairs(batch_size, embeddings, device, labels, superclass, superclass
 
 class CosineContrastiveLoss(nn.Module):
     """
-    Cosine Contrastive Loss for training models with contrastive learning.
-    This loss function computes the cosine distance between pairs of embeddings and applies dynamic margins
-    based on animacy labels.
-    The animacy labels are used to determine whether the pairs belong to the same or different animacy classes.
-    The loss is computed as the mean of the positive and negative distances, with margins applied to the negative distances.
+    Contrastive loss on cosine distance with animacy-aware margins.
+    - Positive pairs: penalize distance above a small margin.
+    - Negative pairs: enforce a margin that depends on animacy (same/different superclass).
+    Returns mean loss over all pairs.
     """
     def __init__(self, superclass, superclass_mapping, classnames, margin_same=0.3, margin_diff=0.5):
         super(CosineContrastiveLoss, self).__init__()
@@ -59,10 +64,11 @@ class CosineContrastiveLoss(nn.Module):
         self.classnames = classnames
 
     def forward(self, projections, labels):
-        # Enforce expected shape for projections.
+        # Expect 2D projection matrix: [B, D]
         if projections.dim() != 2:
             raise ValueError(f"'projections' must be 2D [B, D], got {tuple(projections.shape)}")
 
+        # Build pairwise targets and pair tensors
         y_true, y_pred, animacy_labels = prepare_pairs(
             batch_size=projections.size(0),
             embeddings=projections,
@@ -73,10 +79,11 @@ class CosineContrastiveLoss(nn.Module):
             classnames=self.classnames
         )
 
+        # Cosine distance in [0, 2]; lower means more similar
         cosine_distances = 1 - F.cosine_similarity(y_pred[:, 0, :], y_pred[:, 1, :], dim=-1)
 
-        # Determine dynamic margins based on animacy
-        posdist_margin = 0.05
+        # Animacy-aware margins: tighter for same animacy, looser for different
+        posdist_margin = 0.05  # small tolerance for positives
         same_animacy = (animacy_labels[:, 0] == animacy_labels[:, 1])
         margins = torch.where(
             same_animacy,
@@ -84,7 +91,9 @@ class CosineContrastiveLoss(nn.Module):
             torch.full_like(cosine_distances, float(self.margin_diff)),
         )
 
+        # Positive: push distance toward ≤ posdist_margin
         positive_distances = y_true * torch.square(torch.clamp(cosine_distances - posdist_margin, min=0.0))
+        # Negative: push distance to be ≥ margin
         negative_distances = (1 - y_true) * torch.square(torch.clamp(margins - cosine_distances, min=0.0))
 
         return torch.mean(positive_distances + negative_distances)
