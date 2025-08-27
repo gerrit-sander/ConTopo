@@ -1,7 +1,7 @@
 import argparse
 from torchvision import transforms
 from torchvision import datasets
-from utils.train import load_cifar10_metadata, AverageMeter, save_checkpoint, unwrap, tb_logger, TwoCropTransform
+from utils.train import load_cifar10_metadata, AverageMeter, save_checkpoint, unwrap, tb_logger, TwoCropTransform, grad_norm
 import torch
 import torch.backends.cudnn as cudnn
 from networks.shallowCNN import ProjectionShallowCNN, LinearClassifier
@@ -18,23 +18,27 @@ def parse_arguments():
     parser = argparse.ArgumentParser()
 
     # General settings
+    parser.add_argument('--trial', type=int, default=0, help='trial number for multiple runs (used in naming folders)')
     parser.add_argument('--print_freq', type=int, default=10, help='print frequency')
+    parser.add_argument('--num_workers', type=int, default=2, help='number of workers for data loading')
+    parser.add_argument('--task_method', type=str, default='supcon', choices=['supcon', 'simclr'], help='type of task loss to use')
+
+    # Topographic Loss settings
+    parser.add_argument('topography_type', type=str, choices=['global', 'ws'], help='type of topographic loss to use')
+    parser.add_argument('--topographic_loss_rho', type=float, default=0.05, help='balancing factor of the two losses')
+
+    # Optimization settings
     parser.add_argument('--epochs', type=int, default=10, help='number of epochs to train')
     parser.add_argument('--batch_size', type=int, default=64, help='batch size for training')
-    parser.add_argument('--num_workers', type=int, default=2, help='number of workers for data loading')
     parser.add_argument('--readout_epochs', type=int, default=20, help='number of epochs for readout training')
     parser.add_argument('--learning_rate', type=float, default=0.001, help='learning rate')
+
+    # Model settings
     parser.add_argument('model_type', type=str, choices=['shallowcnn', 'resnet18'], help='type of model to use')
-    
-    # Loss and model parameters
     parser.add_argument('--embedding_dim', type=int, default=256, help='dimension of the embedding space')
     parser.add_argument('--projection_dim', type=int, default=128, help='dimension of the projection head for contrastive learning')
-    parser.add_argument('--topographic_loss_lambda', type=float, default=0.02, help='weight for the topographic loss')
     parser.add_argument('--use_dropout', action='store_true', help='use dropout in the projection head (if applicable)')
     parser.add_argument('--p_dropout', type=float, default=0.5, help='dropout probability (if applicable)')
-    parser.add_argument('topography_type', type=str, choices=['global', 'ws'], help='type of topographic loss to use')
-    parser.add_argument('--task_method', type=str, default='supcon', choices=['supcon', 'simclr'], help='type of task loss to use')
-    parser.add_argument('--trial', type=int, default=0, help='trial number for multiple runs (used in naming folders)')
 
     arguments = parser.parse_args()
 
@@ -44,12 +48,12 @@ def parse_arguments():
     arguments.dataset_folder = './dataset'
     arguments.save_freq = max(1, arguments.epochs // 10)  # Save every 10% of epochs, rounded up
 
-    arguments.model_name = '{}_{}topo_{}embdims_{}projdims_{}lambda_{}epochs_{}bsz_nwork{}_readep{}_lr{}_{}dropout_trial{}'.format(
+    arguments.model_name = '{}_{}topo_{}embdims_{}projdims_{}rho_{}epochs_{}bsz_nwork{}_readep{}_lr{}_{}dropout_trial{}'.format(
         arguments.task_method,
         arguments.topography_type,
         arguments.embedding_dim, 
         arguments.projection_dim, 
-        arguments.topographic_loss_lambda, 
+        arguments.topographic_loss_rho, 
         arguments.epochs,
         arguments.batch_size,
         arguments.num_workers,
@@ -71,6 +75,7 @@ def parse_arguments():
 
 def cifar10_loader(arguments):
 
+    # Use standard normalization and data augmentation for CIFAR-10
     normalize = transforms.Normalize(mean=(0.4914, 0.4822, 0.4465), std=(0.2023, 0.1994, 0.2010))
     
     val_transform = transforms.Compose([
@@ -78,6 +83,7 @@ def cifar10_loader(arguments):
         normalize,
     ])
     
+    # Data augmentation for contrastive learning based on SimCLR
     train_transform = transforms.Compose([
         transforms.RandomResizedCrop(size=32, scale=(0.2, 1.)),
         transforms.RandomHorizontalFlip(),
@@ -89,6 +95,7 @@ def cifar10_loader(arguments):
         normalize,
     ])
 
+    # train_dataset has two transformed versions of each image
     train_dataset = datasets.CIFAR10(root=arguments.dataset_folder, transform=TwoCropTransform(train_transform), download=True)
     val_dataset = datasets.CIFAR10(root=arguments.dataset_folder, train=False, download=True, transform=val_transform)
     
@@ -108,7 +115,6 @@ def cifar10_loader(arguments):
 
 def setup_model(arguments):
 
-    cifar10_config = load_cifar10_metadata()
     if arguments.model_type == 'shallowcnn':
         model = ProjectionShallowCNN(emb_dim=arguments.embedding_dim, feat_dim=arguments.projection_dim, ret_emb=True, use_dropout=arguments.use_dropout, p_dropout=arguments.p_dropout)
     elif arguments.model_type == 'resnet18':
@@ -117,9 +123,9 @@ def setup_model(arguments):
     task_loss = SupConLoss(temperature=0.07)
 
     if arguments.topography_type == 'global':
-        topographic_loss = Global_Topographic_Loss(weight=arguments.topographic_loss_lambda, emb_dim=arguments.embedding_dim)
+        topographic_loss = Global_Topographic_Loss(weight=1.0, emb_dim=arguments.embedding_dim)
     elif arguments.topography_type == 'ws':
-        topographic_loss = Local_WS_Loss(weight=arguments.topographic_loss_lambda)
+        topographic_loss = Local_WS_Loss(weight=1.0)
 
     if torch.cuda.is_available():
         if torch.cuda.device_count() > 1:
@@ -141,6 +147,12 @@ def train(train_loader, model, task_loss, topographic_loss, optimizer, epoch, ar
     topographic_losses = AverageMeter()
     task_losses = AverageMeter()
     data_time = AverageMeter()
+
+    rho = arguments.topographic_loss_rho     
+    beta = 0.1
+    eps = 1e-8
+    lambda_max = 1e4
+    lambda_hat = None
 
     end = time.time()
 
@@ -166,13 +178,28 @@ def train(train_loader, model, task_loss, topographic_loss, optimizer, epoch, ar
             raise ValueError(f"Unknown task method: {arguments.task_method}")
 
         if arguments.topography_type == 'ws':
-            base = unwrap(model)   # returns model.module if DataParallel, else model
+            base = unwrap(model)
             linear_layer = base.encoder.fc
             topographic_loss_value = topographic_loss(linear_layer=linear_layer)
+            measure_params = list(linear_layer.parameters())
         elif arguments.topography_type == 'global':
             topographic_loss_value = topographic_loss(embeddings)
+            if isinstance(model, torch.nn.DataParallel):
+                measure_params = [p for p in model.encoder.module.parameters() if p.requires_grad]
+            else:
+                measure_params = [p for p in model.encoder.parameters() if p.requires_grad]
+        else:
+            measure_params = [p for p in model.parameters() if p.requires_grad]
 
-        loss = task_loss_value + topographic_loss_value
+        nt = grad_norm(task_loss_value, measure_params)
+        np_ = grad_norm(topographic_loss_value, measure_params)
+        target_lambda = (rho * nt / (np_ + eps)).clamp(0.0, lambda_max).detach()
+        if lambda_hat is None:
+            lambda_hat = target_lambda
+        else:
+            lambda_hat = (1 - beta) * lambda_hat + beta * target_lambda
+
+        loss = task_loss_value + lambda_hat.detach() * topographic_loss_value
 
         losses.update(loss.item(), bsz)
         task_losses.update(task_loss_value.item(), bsz)
@@ -187,11 +214,13 @@ def train(train_loader, model, task_loss, topographic_loss, optimizer, epoch, ar
 
         # print info
         if (idx + 1) % arguments.print_freq == 0:
+            lam_val = float(lambda_hat.detach().cpu()) if lambda_hat is not None else 1.0
             print(f'Epoch: [{epoch}][{idx + 1}/{len(train_loader)}]\t'
                   f'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                   f'Loss {losses.val:.4f} ({losses.avg:.4f})\t'
                   f'Topographic Loss {topographic_losses.val:.4f} ({topographic_losses.avg:.4f})\t'
                   f'Task Loss {task_losses.val:.4f} ({task_losses.avg:.4f})\t'
+                  f'Lambda {lam_val:.4f}\t'
                   f'Data Time {data_time.val:.3f} ({data_time.avg:.3f})')
             sys.stdout.flush()
 

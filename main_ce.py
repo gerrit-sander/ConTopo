@@ -1,7 +1,7 @@
 import argparse
 from torchvision import transforms
 from torchvision import datasets
-from utils.train import AverageMeter, save_checkpoint, unwrap, accuracy, tb_logger
+from utils.train import AverageMeter, save_checkpoint, unwrap, accuracy, tb_logger, grad_norm
 import torch
 import torch.backends.cudnn as cudnn
 from networks.shallowCNN import LinearShallowCNN
@@ -29,7 +29,7 @@ def parse_arguments():
     
     # Loss and model parameters
     parser.add_argument('--embedding_dim', type=int, default=256, help='dimension of the embedding space')
-    parser.add_argument('--topographic_loss_lambda', type=float, default=0.1, help='weight for the topographic loss')
+    parser.add_argument('--topographic_loss_rho', type=float, default=0.05, help='balancing factor of the two losses')
     parser.add_argument('--trial', type=int, default=0, help='trial number for multiple runs (used in naming folders)')
 
     arguments = parser.parse_args()
@@ -41,10 +41,10 @@ def parse_arguments():
     arguments.save_freq = max(1, arguments.epochs // 10)  # Save every 10% of epochs, rounded up
     arguments.num_classes = 10  # CIFAR-10 has 10 classes
 
-    arguments.model_name = 'crossentropy_{}topo_{}embdims_{}lambda_{}epochs_{}bsz_{}nwork_{}lr_{}dropout_trial{}'.format(
+    arguments.model_name = 'crossentropy_{}topo_{}embdims_{}rho_{}epochs_{}bsz_{}nwork_{}lr_{}dropout_trial{}'.format(
         arguments.topography_type,
         arguments.embedding_dim,
-        arguments.topographic_loss_lambda, 
+        arguments.topographic_loss_rho, 
         arguments.epochs,
         arguments.batch_size,
         arguments.num_workers,
@@ -106,9 +106,9 @@ def setup_model(arguments):
     task_loss = torch.nn.CrossEntropyLoss()
 
     if arguments.topography_type == 'global':
-        topographic_loss = Global_Topographic_Loss(weight=arguments.topographic_loss_lambda, emb_dim=arguments.embedding_dim)
+        topographic_loss = Global_Topographic_Loss(weight=1.0, emb_dim=arguments.embedding_dim)
     elif arguments.topography_type == 'ws':
-        topographic_loss = Local_WS_Loss(weight=arguments.topographic_loss_lambda)
+        topographic_loss = Local_WS_Loss(weight=1.0)
 
     if torch.cuda.is_available():
         if torch.cuda.device_count() > 1:
@@ -132,6 +132,12 @@ def train(train_loader, model, task_loss, topographic_loss, optimizer, epoch, ar
     data_time = AverageMeter()
     acc = AverageMeter()
 
+    rho = arguments.topographic_loss_rho    
+    beta = 0.1
+    eps = 1e-8
+    lambda_max = 1e4
+    lambda_hat = None
+
     end = time.time()
 
     for idx, (images, labels) in enumerate(train_loader):
@@ -148,10 +154,25 @@ def train(train_loader, model, task_loss, topographic_loss, optimizer, epoch, ar
         if arguments.topography_type == 'ws':
             linear_layer = model.encoder.module.fc if isinstance(model, torch.nn.DataParallel) else model.encoder.fc
             topographic_loss_value = topographic_loss(linear_layer=linear_layer)
+            measure_params = list(linear_layer.parameters())
         elif arguments.topography_type == 'global':
             topographic_loss_value = topographic_loss(embeddings)
+            if isinstance(model, torch.nn.DataParallel):
+                measure_params = [p for p in model.encoder.module.parameters() if p.requires_grad]
+            else:
+                measure_params = [p for p in model.encoder.parameters() if p.requires_grad]
+        else:
+            measure_params = [p for p in model.parameters() if p.requires_grad]
 
-        loss = task_loss_value + topographic_loss_value
+        nt = grad_norm(task_loss_value, measure_params)
+        np_ = grad_norm(topographic_loss_value, measure_params)
+        target_lambda = (rho * nt / (np_ + eps)).clamp(0.0, lambda_max).detach()
+        if lambda_hat is None:
+            lambda_hat = target_lambda
+        else:
+            lambda_hat = (1 - beta) * lambda_hat + beta * target_lambda
+
+        loss = task_loss_value + lambda_hat.detach() * topographic_loss_value
 
         losses.update(loss.item(), bsz)
         task_losses.update(task_loss_value.item(), bsz)
@@ -170,11 +191,13 @@ def train(train_loader, model, task_loss, topographic_loss, optimizer, epoch, ar
 
         # print info
         if (idx + 1) % arguments.print_freq == 0:
+            lam_val = float(lambda_hat.detach().cpu()) if lambda_hat is not None else 1.0
             print(f'Epoch: [{epoch}][{idx + 1}/{len(train_loader)}]\t'
                   f'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                   f'Loss {losses.val:.4f} ({losses.avg:.4f})\t'
                   f'Topographic Loss {topographic_losses.val:.4f} ({topographic_losses.avg:.4f})\t'
                   f'Task Loss {task_losses.val:.4f} ({task_losses.avg:.4f})\t'
+                  f'Lambda {lam_val:.4f}\t'
                   f'Data Time {data_time.val:.3f} ({data_time.avg:.3f})\t'
                   f'Acc@1 {acc.val:.3f} ({acc.avg:.3f})')
             sys.stdout.flush()

@@ -89,3 +89,12 @@ class tb_logger:
 
             def close(self):
                 self.writer.close()
+
+def grad_norm(loss, params):
+    # L2 norm of grads of `loss` wrt `params` (no weight update)
+    grads = torch.autograd.grad(loss, params, retain_graph=True, allow_unused=True)
+    flat = [g.detach().reshape(-1) for g in grads if g is not None]
+    if len(flat) == 0:
+        return torch.tensor(0.0, device=loss.device)
+    v = torch.cat(flat)
+    return torch.linalg.norm(v, ord=2)
