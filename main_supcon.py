@@ -1,7 +1,7 @@
 import argparse
 from torchvision import transforms
 from torchvision import datasets
-from utils.train import load_cifar10_metadata, AverageMeter, save_checkpoint, unwrap, tb_logger, TwoCropTransform, grad_norm
+from utils.train import AverageMeter, save_checkpoint, unwrap, tb_logger, TwoCropTransform, grad_norm
 import torch
 import torch.backends.cudnn as cudnn
 from networks.shallowCNN import ProjectionShallowCNN, LinearClassifier
@@ -413,7 +413,6 @@ def main():
         logger.log_value('linear_readout_val_loss', val_loss, epoch)
         logger.log_value('linear_readout_val_acc', val_acc, epoch)
 
-        # ------ READOUT CHECKPOINTS ------
         # Periodic checkpoint of the linear head only (encoder already saved above)
         if (epoch % arguments.save_freq) == 0:
             readout_state = {
