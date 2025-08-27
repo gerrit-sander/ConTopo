@@ -41,7 +41,7 @@ def parse_arguments():
 
     subdir = 'ResNet18' if arguments.model_type == 'resnet18' else 'ShallowCNN'
     arguments.model_folder = f'./save/{subdir}/models'
-    arguments.tensorboard_folder = f'./save/{subdir}/tensorboard'
+    arguments.tensorboard_folder = f'./save/{subdir}/tensorboard/ce'
     arguments.dataset_folder = './dataset'
     arguments.save_freq = max(1, arguments.epochs // 10)  # Save every 10% of epochs, rounded up
     arguments.num_classes = 10
