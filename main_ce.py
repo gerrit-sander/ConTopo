@@ -17,20 +17,25 @@ def parse_arguments():
     parser = argparse.ArgumentParser()
 
     # General settings
+    parser.add_argument('--trial', type=int, default=0, help='trial number for multiple runs (used in naming folders)')
     parser.add_argument('--print_freq', type=int, default=10, help='print frequency')
+    parser.add_argument('--num_workers', type=int, default=2, help='number of workers for data loading')
+
+    # Topopgaphic Loss settings
+    parser.add_argument('topography_type', type=str, choices=['global', 'ws'], help='type of topographic loss to use')
+    parser.add_argument('--topographic_loss_rho', type=float, default=0.05, help='balancing factor of the two losses')
+
+    # Optimization settings
     parser.add_argument('--epochs', type=int, default=30, help='number of epochs to train')
     parser.add_argument('--batch_size', type=int, default=64, help='batch size for training')
-    parser.add_argument('--num_workers', type=int, default=2, help='number of workers for data loading')
+    parser.add_argument('--readout_epochs', type=int, default=20, help='number of epochs for readout training')
     parser.add_argument('--learning_rate', type=float, default=0.001, help='learning rate')
+
+    # Model Settings
     parser.add_argument('model_type', type=str, choices=['shallowcnn', 'resnet18'], help='type of model to use')
+    parser.add_argument('--embedding_dim', type=int, default=256, help='dimension of the embedding space')
     parser.add_argument('--use_dropout', action='store_true', help='use dropout in the projection head (if applicable)')
     parser.add_argument('--p_dropout', type=float, default=0.5, help='dropout probability (if applicable)')
-    parser.add_argument('topography_type', type=str, choices=['global', 'ws'], help='type of topographic loss to use')
-    
-    # Loss and model parameters
-    parser.add_argument('--embedding_dim', type=int, default=256, help='dimension of the embedding space')
-    parser.add_argument('--topographic_loss_rho', type=float, default=0.05, help='balancing factor of the two losses')
-    parser.add_argument('--trial', type=int, default=0, help='trial number for multiple runs (used in naming folders)')
 
     arguments = parser.parse_args()
 
@@ -39,7 +44,7 @@ def parse_arguments():
     arguments.tensorboard_folder = f'./save/{subdir}/tensorboard'
     arguments.dataset_folder = './dataset'
     arguments.save_freq = max(1, arguments.epochs // 10)  # Save every 10% of epochs, rounded up
-    arguments.num_classes = 10  # CIFAR-10 has 10 classes
+    arguments.num_classes = 10
 
     arguments.model_name = 'crossentropy_{}topo_{}embdims_{}rho_{}epochs_{}bsz_{}nwork_{}lr_{}dropout_trial{}'.format(
         arguments.topography_type,
@@ -65,6 +70,7 @@ def parse_arguments():
 
 def cifar10_loader(arguments):
 
+    # Use standard normalization and data augmentation for CIFAR-10
     normalize = transforms.Normalize(mean=(0.4914, 0.4822, 0.4465), std=(0.2023, 0.1994, 0.2010))
     
     val_transform = transforms.Compose([
@@ -72,6 +78,7 @@ def cifar10_loader(arguments):
         normalize,
     ])
     
+    # Data augmentations for more diversity in training
     train_transform = transforms.Compose([
     transforms.RandomResizedCrop(size=32, scale=(0.2, 1.)),
     transforms.RandomHorizontalFlip(),
@@ -98,13 +105,16 @@ def cifar10_loader(arguments):
 
 def setup_model(arguments):
 
+    # Select the proper model
     if arguments.model_type == 'shallowcnn':
         model = LinearShallowCNN(emb_dim=arguments.embedding_dim, num_classes=arguments.num_classes, ret_emb=True, use_dropout=arguments.use_dropout, p_dropout=arguments.p_dropout)
     elif arguments.model_type == 'resnet18':
         model = LinearResNet18(emb_dim=arguments.embedding_dim, num_classes=arguments.num_classes, ret_emb=True)
 
+    # Define the Cross-Entropy loss
     task_loss = torch.nn.CrossEntropyLoss()
 
+    # Select the topographic loss type
     if arguments.topography_type == 'global':
         topographic_loss = Global_Topographic_Loss(weight=1.0, emb_dim=arguments.embedding_dim)
     elif arguments.topography_type == 'ws':

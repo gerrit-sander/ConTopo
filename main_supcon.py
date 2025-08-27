@@ -83,7 +83,7 @@ def cifar10_loader(arguments):
         normalize,
     ])
     
-    # Data augmentation for contrastive learning based on SimCLR
+    # Data augmentation for contrastive learning based on SimCLR for two augmented versions
     train_transform = transforms.Compose([
         transforms.RandomResizedCrop(size=32, scale=(0.2, 1.)),
         transforms.RandomHorizontalFlip(),
@@ -115,13 +115,16 @@ def cifar10_loader(arguments):
 
 def setup_model(arguments):
 
+    # Select the proper model
     if arguments.model_type == 'shallowcnn':
         model = ProjectionShallowCNN(emb_dim=arguments.embedding_dim, feat_dim=arguments.projection_dim, ret_emb=True, use_dropout=arguments.use_dropout, p_dropout=arguments.p_dropout)
     elif arguments.model_type == 'resnet18':
         model = ProjectionResNet18(emb_dim=arguments.embedding_dim, feat_dim=arguments.projection_dim, ret_emb=True)
 
+    # Select the task loss (SupConLoss implements both SupCon loss and SimCLR loss)
     task_loss = SupConLoss(temperature=0.07)
 
+    # Select the topographic loss type
     if arguments.topography_type == 'global':
         topographic_loss = Global_Topographic_Loss(weight=1.0, emb_dim=arguments.embedding_dim)
     elif arguments.topography_type == 'ws':
