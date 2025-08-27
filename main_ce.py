@@ -1,4 +1,5 @@
 import argparse
+from argparse import BooleanOptionalAction
 from torchvision import transforms
 from torchvision import datasets
 from utils.train import AverageMeter, save_checkpoint, unwrap, accuracy, tb_logger, grad_norm
@@ -33,7 +34,7 @@ def parse_arguments():
     # Model Settings
     parser.add_argument('model_type', type=str, choices=['shallowcnn', 'resnet18'], help='type of model to use')
     parser.add_argument('--embedding_dim', type=int, default=256, help='dimension of the embedding space')
-    parser.add_argument('--use_dropout', action='store_true', help='use dropout in the projection head (if applicable)')
+    parser.add_argument('--use_dropout', action=BooleanOptionalAction, default=True, help='use dropout')
     parser.add_argument('--p_dropout', type=float, default=0.5, help='dropout probability (if applicable)')
 
     arguments = parser.parse_args()
