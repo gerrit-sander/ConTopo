@@ -27,7 +27,7 @@ def main():
 
     config = load_cifar10_metadata()
     class_names = config["CIFAR10_CLASSES"]
-    args = meta["args"]
+    opt = meta["args"]
 
     torch.manual_seed(42)
     np.random.seed(42)

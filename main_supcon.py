@@ -49,7 +49,7 @@ def parse_arguments():
     arguments.dataset_folder = './dataset'
     arguments.save_freq = max(1, arguments.epochs // 10)  # Save every 10% of epochs, rounded up
 
-    arguments.model_name = '{}_{}topo_{}embdims_{}projdims_{}rho_{}epochs_{}bsz_nwork{}_readep{}_lr{}_{}dropout_trial{}'.format(
+    arguments.model_name = '{}_{}topo_{}embdims_{}projdims_{}rho_{}epochs_{}bsz_nwork{}_readep{}_lr{}_{}dropout'.format(
         arguments.task_method,
         arguments.topography_type,
         arguments.embedding_dim, 
@@ -61,16 +61,15 @@ def parse_arguments():
         arguments.readout_epochs,
         arguments.learning_rate,
         arguments.p_dropout if arguments.use_dropout else 0.0,
-        arguments.trial
     )
 
-    arguments.tensorboard_folder = os.path.join(arguments.tensorboard_folder, arguments.model_name)
-    if not os.path.isdir(arguments.tensorboard_folder):
-        os.makedirs(arguments.tensorboard_folder)
+    run_name = f"trial_{arguments.trial:02d}"
 
-    arguments.model_folder = os.path.join(arguments.model_folder, arguments.model_name)
-    if not os.path.isdir(arguments.model_folder):
-        os.makedirs(arguments.model_folder)
+    arguments.tensorboard_folder = os.path.join(arguments.tensorboard_folder, arguments.model_name, run_name)
+    os.makedirs(arguments.tensorboard_folder, exist_ok=True)
+
+    arguments.model_folder = os.path.join(arguments.model_folder, arguments.model_name, run_name)
+    os.makedirs(arguments.model_folder, exist_ok=True)
 
     return arguments
 

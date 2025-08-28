@@ -23,7 +23,7 @@ def main():
 
     config = load_cifar10_metadata()
     class_names = config["CIFAR10_CLASSES"]
-    args = meta["args"]
+    opt = meta["args"]
 
     ### TODO: IMPLEMENT AN EXPERIMENT ###
 
