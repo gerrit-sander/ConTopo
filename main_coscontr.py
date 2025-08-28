@@ -106,9 +106,13 @@ def cifar10_loader(arguments):
     )
 
     val_loader = torch.utils.data.DataLoader(
-        val_dataset, batch_size=arguments.batch_size, shuffle=False,
-        num_workers=8, pin_memory=True)
-    
+        val_dataset, 
+        batch_size=arguments.batch_size, 
+        shuffle=False,
+        num_workers=arguments.num_workers,
+        pin_memory=True
+    )
+
     return train_loader, val_loader
 
 def setup_model(arguments):
@@ -157,6 +161,7 @@ def train(train_loader, model, task_loss, topographic_loss, optimizer, epoch, ar
     topographic_losses = AverageMeter()
     task_losses = AverageMeter()
     data_time = AverageMeter()
+    lambda_hat_meter = AverageMeter()
 
     # Dynamic loss balancing:
     # - 0 < rho < 1  → task loss dominates gradients
@@ -208,6 +213,8 @@ def train(train_loader, model, task_loss, topographic_loss, optimizer, epoch, ar
         else:
             # EMA to stabilize lambda across steps
             lambda_hat = (1 - beta) * lambda_hat + beta * target_lambda
+        # Track lambda_hat value
+        lambda_hat_meter.update(float(lambda_hat.detach().cpu()), bsz)
 
         # combined objective
         loss = task_loss_value + lambda_hat.detach() * topographic_loss_value
@@ -228,15 +235,17 @@ def train(train_loader, model, task_loss, topographic_loss, optimizer, epoch, ar
 
         # periodic training log
         if (idx + 1) % arguments.print_freq == 0:
+            lam_val = float(lambda_hat.detach().cpu()) if lambda_hat is not None else 1.0
             print(f'Epoch: [{epoch}][{idx + 1}/{len(train_loader)}]\t'
                   f'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                   f'Loss {losses.val:.4f} ({losses.avg:.4f})\t'
                   f'Topographic Loss {topographic_losses.val:.4f} ({topographic_losses.avg:.4f})\t'
                   f'Task Loss {task_losses.val:.4f} ({task_losses.avg:.4f})\t'
+                  f'Lambda {lam_val:.4f}\t'
                   f'Data Time {data_time.val:.3f} ({data_time.avg:.3f})')
             sys.stdout.flush()
 
-    return losses.avg, topographic_losses.avg, task_losses.avg
+    return losses.avg, topographic_losses.avg, task_losses.avg, lambda_hat_meter.avg
 
 def validate(val_loader, model, criterion, arguments):
     model.eval()
@@ -280,6 +289,36 @@ def validate(val_loader, model, criterion, arguments):
     print(' * Acc@1 {acc.avg:.3f}'.format(acc=acc))
     return losses.avg, acc.avg
 
+def validate_contrastive(val_loader, model, task_loss, topographic_loss, arguments):
+    """Eval the contrastive objective (no grads): returns avg task & topo losses."""
+    model.eval()
+    task_losses = AverageMeter()
+    topo_losses = AverageMeter()
+
+    with torch.no_grad():
+        for images, labels in val_loader:
+            device = next(model.parameters()).device
+            images = images.to(device, non_blocking=True)
+            labels = labels.to(device, non_blocking=True)
+
+            embeddings, features = model(images)
+
+            # task contrastive loss on projected features
+            task_loss_value = task_loss(features, labels)
+
+            # topographic loss (same logic as in train)
+            if arguments.topography_type == 'ws':
+                linear_layer = model.encoder.module.fc if isinstance(model, torch.nn.DataParallel) else model.encoder.fc
+                topo_loss_value = topographic_loss(linear_layer=linear_layer)
+            else:  # 'global'
+                topo_loss_value = topographic_loss(embeddings)
+
+            bsz = labels.size(0)
+            task_losses.update(task_loss_value.item(), bsz)
+            topo_losses.update(topo_loss_value.item(), bsz)
+
+    return task_losses.avg, topo_losses.avg
+
 def main():
     arguments = parse_arguments()
 
@@ -296,15 +335,28 @@ def main():
 
     for epoch in range(1, arguments.epochs + 1):
         time1 = time.time()
-        avg_loss, avg_topoloss, avg_taskloss = train(
+        avg_loss, avg_topoloss, avg_taskloss, avg_lambda_hat = train(
             train_loader, model, task_loss, topographic_loss, optimizer, epoch, arguments
         )
+        val_task_loss, val_topo_loss = validate_contrastive(
+            val_loader, model, task_loss, topographic_loss, arguments
+        )
+
+        # Use the training epoch’s avg_lambda_hat to form a comparable total (optional)
+        val_total_loss = val_task_loss + avg_lambda_hat * val_topo_loss
+
+        # TensorBoard logs
+        logger.log_value('val_task_loss', val_task_loss, epoch)
+        logger.log_value('val_topographic_loss', val_topo_loss, epoch)
+        logger.log_value('val_total_loss', val_total_loss, epoch)
+        
         time2 = time.time()
         print('epoch {}, total time {:.2f}'.format(epoch, time2 - time1))
 
         logger.log_value('total_loss', avg_loss, epoch)
         logger.log_value('task_loss', avg_taskloss, epoch)
         logger.log_value('topographic_loss', avg_topoloss, epoch)
+        logger.log_value('lambda_hat', avg_lambda_hat, epoch)
 
         # ------ CONTRASTIVE CHECKPOINTS ------
         # Periodic full snapshot (encoder + optimizer + metrics)

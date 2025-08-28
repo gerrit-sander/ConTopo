@@ -75,7 +75,6 @@ def parse_arguments():
     return arguments
 
 def cifar10_loader(arguments):
-
     # Use standard normalization and data augmentation for CIFAR-10
     normalize = transforms.Normalize(mean=(0.4914, 0.4822, 0.4465), std=(0.2023, 0.1994, 0.2010))
     
@@ -84,35 +83,44 @@ def cifar10_loader(arguments):
         normalize,
     ])
     
-    # Data augmentation for contrastive learning based on SimCLR for two augmented versions
+    # Training augmentations (two views for contrastive)
     train_transform = transforms.Compose([
         transforms.RandomResizedCrop(size=32, scale=(0.2, 1.)),
         transforms.RandomHorizontalFlip(),
-        transforms.RandomApply([
-            transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)
-        ], p=0.8),
+        transforms.RandomApply([transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)], p=0.8),
         transforms.RandomGrayscale(p=0.2),
         transforms.ToTensor(),
         normalize,
     ])
 
-    # train_dataset has two transformed versions of each image
+    # contrastive val transform for loss validation during training
+    val_transform_contrastive = transforms.Compose([
+        transforms.RandomResizedCrop(size=32, scale=(0.5, 1.0)),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+        normalize,
+    ])
+
+    # Datasets
     train_dataset = datasets.CIFAR10(root=arguments.dataset_folder, transform=TwoCropTransform(train_transform), download=True)
     val_dataset = datasets.CIFAR10(root=arguments.dataset_folder, train=False, download=True, transform=val_transform)
-    
-    train_loader = torch.utils.data.DataLoader(
-        train_dataset,
-        batch_size=arguments.batch_size,
-        shuffle=True,
-        num_workers=arguments.num_workers,
-        pin_memory=True,
-    )
+    val_dataset_contrastive = datasets.CIFAR10(root=arguments.dataset_folder, train=False, download=True, transform=TwoCropTransform(val_transform_contrastive))
 
+    # Loaders
+    train_loader = torch.utils.data.DataLoader(
+        train_dataset, batch_size=arguments.batch_size, shuffle=True,
+        num_workers=arguments.num_workers, pin_memory=True,
+    )
     val_loader = torch.utils.data.DataLoader(
         val_dataset, batch_size=arguments.batch_size, shuffle=False,
-        num_workers=arguments.num_workers, pin_memory=True)
-    
-    return train_loader, val_loader
+        num_workers=arguments.num_workers, pin_memory=True,
+    )
+    val_contrastive_loader = torch.utils.data.DataLoader(
+        val_dataset_contrastive, batch_size=arguments.batch_size, shuffle=False,
+        num_workers=arguments.num_workers, pin_memory=True,
+    )
+
+    return train_loader, val_loader, val_contrastive_loader
 
 def setup_model(arguments):
 
@@ -151,6 +159,7 @@ def train(train_loader, model, task_loss, topographic_loss, optimizer, epoch, ar
     topographic_losses = AverageMeter()
     task_losses = AverageMeter()
     data_time = AverageMeter()
+    lambda_hat_meter = AverageMeter()
 
     # Dynamic loss balancing:
     # - 0 < rho < 1  → task loss dominates
@@ -214,6 +223,8 @@ def train(train_loader, model, task_loss, topographic_loss, optimizer, epoch, ar
             lambda_hat = target_lambda
         else:
             lambda_hat = (1 - beta) * lambda_hat + beta * target_lambda  # EMA smoothing
+        # Track lambda_hat value
+        lambda_hat_meter.update(float(lambda_hat.detach().cpu()), bsz)
 
         # combined objective
         loss = task_loss_value + lambda_hat.detach() * topographic_loss_value
@@ -244,7 +255,7 @@ def train(train_loader, model, task_loss, topographic_loss, optimizer, epoch, ar
                   f'Data Time {data_time.val:.3f} ({data_time.avg:.3f})')
             sys.stdout.flush()
 
-    return losses.avg, topographic_losses.avg, task_losses.avg
+    return losses.avg, topographic_losses.avg, task_losses.avg, lambda_hat_meter.avg
 
 def validate(val_loader, model, criterion, arguments):
     model.eval()
@@ -288,10 +299,54 @@ def validate(val_loader, model, criterion, arguments):
     print(' * Acc@1 {acc.avg:.3f}'.format(acc=acc))
     return losses.avg, acc.avg
 
+def validate_contrastive(val_loader, model, task_loss, topographic_loss, arguments):
+    """Eval SupCon/SimCLR + topo on the validation set with TWO views (no grads)."""
+    model.eval()
+    task_losses = AverageMeter()
+    topo_losses = AverageMeter()
+
+    with torch.no_grad():
+        for images, labels in val_loader:
+            device = next(model.parameters()).device
+            if isinstance(images, (list, tuple)):
+                v1, v2 = images
+                B = labels.size(0)
+                x = torch.cat([v1, v2], dim=0)
+            else:
+                B = labels.size(0)
+                x = torch.cat([images, images], dim=0)
+
+            x = x.to(device, non_blocking=True)
+            labels = labels.to(device, non_blocking=True)
+
+            embeddings, features = model(x)
+
+            f1, f2 = torch.split(features, [B, B], dim=0)
+            feats_2view = torch.cat([f1.unsqueeze(1), f2.unsqueeze(1)], dim=1)
+
+            # task loss
+            if arguments.task_method == 'supcon':
+                task_val = task_loss(feats_2view, labels)
+            elif arguments.task_method == 'simclr':
+                task_val = task_loss(feats_2view)
+            else:
+                raise ValueError(f"Unknown task method: {arguments.task_method}")
+
+            if arguments.topography_type == 'ws':
+                base = unwrap(model)
+                topo_val = topographic_loss(linear_layer=base.encoder.fc)
+            else:  # 'global'
+                topo_val = topographic_loss(embeddings)
+
+            task_losses.update(task_val.item(), B)
+            topo_losses.update(topo_val.item(), B)
+
+    return task_losses.avg, topo_losses.avg
+
 def main():
     arguments = parse_arguments()
 
-    train_loader, val_loader = cifar10_loader(arguments)
+    train_loader, val_loader, val_contrastive_loader = cifar10_loader(arguments)
 
     ### CONTRASTIVE LEARNING ###
     model, task_loss, topographic_loss = setup_model(arguments)
@@ -304,15 +359,26 @@ def main():
 
     for epoch in range(1, arguments.epochs + 1):
         time1 = time.time()
-        avg_loss, avg_topoloss, avg_taskloss = train(
+        avg_loss, avg_topoloss, avg_taskloss, avg_lambda_hat = train(
             train_loader, model, task_loss, topographic_loss, optimizer, epoch, arguments
         )
+        val_task_loss, val_topo_loss = validate_contrastive(
+            val_contrastive_loader, model, task_loss, topographic_loss, arguments
+        )
+
+        val_total_loss = val_task_loss + avg_lambda_hat * val_topo_loss
+
+        logger.log_value('val_task_loss', val_task_loss, epoch)
+        logger.log_value('val_topographic_loss', val_topo_loss, epoch)
+        logger.log_value('val_total_loss', val_total_loss, epoch)
+
         time2 = time.time()
         print('epoch {}, total time {:.2f}'.format(epoch, time2 - time1))
 
         logger.log_value('total_loss', avg_loss, epoch)
         logger.log_value('task_loss', avg_taskloss, epoch)
         logger.log_value('topographic_loss', avg_topoloss, epoch)
+        logger.log_value('lambda_hat', avg_lambda_hat, epoch)
 
         # ------ CONTRASTIVE CHECKPOINTS ------
         # Periodic full snapshot (encoder + optimizer + metrics)

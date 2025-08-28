@@ -98,8 +98,11 @@ def cifar10_loader(arguments):
     )
 
     val_loader = torch.utils.data.DataLoader(
-        val_dataset, batch_size=arguments.batch_size, shuffle=False,
-        num_workers=8, pin_memory=True)
+        val_dataset, 
+        batch_size=arguments.batch_size, 
+        shuffle=False,
+        num_workers=arguments.num_workers, 
+        pin_memory=True)
     
     return train_loader, val_loader
 
@@ -141,6 +144,7 @@ def train(train_loader, model, task_loss, topographic_loss, optimizer, epoch, ar
     task_losses = AverageMeter()
     data_time = AverageMeter()
     acc = AverageMeter()
+    lambda_hat_meter = AverageMeter()
 
     # Dynamic loss balancing:
     # - 0 < rho < 1  → task loss dominates
@@ -193,6 +197,8 @@ def train(train_loader, model, task_loss, topographic_loss, optimizer, epoch, ar
             lambda_hat = target_lambda
         else:
             lambda_hat = (1 - beta) * lambda_hat + beta * target_lambda  # smooth scaling
+        # Track lambda_hat value
+        lambda_hat_meter.update(float(lambda_hat.detach().cpu()), bsz)
 
         # combined objective
         loss = task_loss_value + lambda_hat.detach() * topographic_loss_value
@@ -228,7 +234,7 @@ def train(train_loader, model, task_loss, topographic_loss, optimizer, epoch, ar
                   f'Acc@1 {acc.val:.3f} ({acc.avg:.3f})')
             sys.stdout.flush()
 
-    return losses.avg, topographic_losses.avg, task_losses.avg
+    return losses.avg, topographic_losses.avg, task_losses.avg, lambda_hat_meter.avg, acc.avg
 
 def validate(val_loader, model, criterion, arguments):
     model.eval()  # eval mode
@@ -303,7 +309,7 @@ def main():
     for epoch in range(1, arguments.epochs + 1):
         time1 = time.time()
         # Train end-to-end with CE; topo term handled inside train()
-        avg_loss, avg_topoloss, avg_taskloss = train(
+        avg_loss, avg_topoloss, avg_taskloss, avg_lambda_hat, avg_train_acc = train(
             train_loader, model, task_loss, topographic_loss, optimizer, epoch, arguments
         )
         time2 = time.time()
@@ -313,6 +319,8 @@ def main():
         logger.log_value('train_total_loss', avg_loss, epoch)
         logger.log_value('train_task_loss', avg_taskloss, epoch)
         logger.log_value('train_topographic_loss', avg_topoloss, epoch)
+        logger.log_value('lambda_hat', avg_lambda_hat, epoch)
+        logger.log_value('train_acc', avg_train_acc, epoch)
 
         # Validation on logits
         val_loss, val_acc = validate(val_loader, logits_model, task_loss, arguments)
