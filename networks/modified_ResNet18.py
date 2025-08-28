@@ -61,14 +61,15 @@ class ResNet18(nn.Module):
     
 class ProjectionResNet18(nn.Module):
     """ResNet18 architecture with a projection head for contrastive learning."""
-    def __init__(self, emb_dim=256, feat_dim=128, ret_emb=False):
+    def __init__(self, emb_dim=256, feat_dim=128, use_dropout=True, p_dropout=0.2, ret_emb=False):
         super(ProjectionResNet18, self).__init__()
         self.ret_emb = ret_emb
         self.emb_dim = emb_dim
         self.encoder = ResNet18(emb_dim=emb_dim)
         self.head = nn.Sequential(
-            nn.Linear(emb_dim, emb_dim),
+            nn.BatchNorm1d(emb_dim),
             nn.ReLU(inplace=True),
+            nn.Dropout(p_dropout) if use_dropout else nn.Identity(),
             nn.Linear(emb_dim, feat_dim)
         )
     

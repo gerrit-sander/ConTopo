@@ -111,7 +111,7 @@ def setup_model(arguments):
     if arguments.model_type == 'shallowcnn':
         model = LinearShallowCNN(emb_dim=arguments.embedding_dim, num_classes=arguments.num_classes, ret_emb=True, use_dropout=arguments.use_dropout, p_dropout=arguments.p_dropout)
     elif arguments.model_type == 'resnet18':
-        model = LinearResNet18(emb_dim=arguments.embedding_dim, num_classes=arguments.num_classes, ret_emb=True)
+        model = LinearResNet18(emb_dim=arguments.embedding_dim, num_classes=arguments.num_classes, ret_emb=True, use_dropout=arguments.use_dropout, p_dropout=arguments.p_dropout)
 
     # Define the Cross-Entropy loss
     task_loss = torch.nn.CrossEntropyLoss()

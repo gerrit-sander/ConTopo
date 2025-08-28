@@ -127,7 +127,7 @@ def setup_model(arguments):
     if arguments.model_type == 'shallowcnn':
         model = ProjectionShallowCNN(emb_dim=arguments.embedding_dim, feat_dim=arguments.projection_dim, ret_emb=True, use_dropout=arguments.use_dropout, p_dropout=arguments.p_dropout)
     elif arguments.model_type == 'resnet18':
-        model = ProjectionResNet18(emb_dim=arguments.embedding_dim, feat_dim=arguments.projection_dim, ret_emb=True)
+        model = ProjectionResNet18(emb_dim=arguments.embedding_dim, feat_dim=arguments.projection_dim, ret_emb=True, use_dropout=arguments.use_dropout, p_dropout=arguments.p_dropout)
 
     # Select the task loss (SupConLoss implements both SupCon loss and SimCLR loss)
     task_loss = SupConLoss(temperature=0.07)
