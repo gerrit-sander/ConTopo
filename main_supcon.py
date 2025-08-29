@@ -56,7 +56,7 @@ def parse_arguments():
         arguments.warm = True
     if arguments.warm:
         arguments.warmup_from = 0.01
-        arguments.warmup_epochs = 10
+        arguments.warm_epochs = 10
         eta_min = arguments.learning_rate * 0.001
         arguments.warmup_to = eta_min + (arguments.learning_rate - eta_min) * (1 + math.cos(math.pi * arguments.warm_epochs / arguments.epochs)) / 2
     else:
