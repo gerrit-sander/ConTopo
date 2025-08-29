@@ -29,8 +29,8 @@ def parse_arguments():
 
     # Optimization settings
     parser.add_argument('--epochs', type=int, default=30, help='number of epochs to train')
-    parser.add_argument('--batch_size', type=int, default=64, help='batch size for training')
-    parser.add_argument('--learning_rate', type=float, default=0.001, help='learning rate')
+    parser.add_argument('--batch_size', type=int, default=512, help='batch size for training')
+    parser.add_argument('--learning_rate', type=float, default=0.8, help='learning rate')
     parser.add_argument('--warm', action='store_true', help='warm-up for large batch training')
 
     # Model Settings
