@@ -356,7 +356,7 @@ def main():
     for epoch in range(1, arguments.epochs + 1):
         # learning rate adjustment
         eta_min = arguments.learning_rate * 0.001
-        lr = eta_min + (lr - eta_min) * (1 + math.cos(math.pi * epoch / arguments.epochs)) / 2
+        lr = eta_min + (arguments.learning_rate - eta_min) * (1 + math.cos(math.pi * epoch / arguments.epochs)) / 2
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
 
