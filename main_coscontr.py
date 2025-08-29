@@ -7,7 +7,7 @@ import torch
 import torch.backends.cudnn as cudnn
 from networks.shallowCNN import ProjectionShallowCNN, LinearClassifier
 from networks.modified_ResNet18 import ProjectionResNet18
-from losses.cosine_contrastive import CosineContrastiveLoss
+from losses.cosine_contrastive import CosineContrastiveLoss, build_label_to_animacy
 from losses.topographic import Global_Topographic_Loss, Local_WS_Loss
 import time
 import os
@@ -139,10 +139,9 @@ def setup_model(arguments):
         model = ProjectionResNet18(emb_dim=arguments.embedding_dim, feat_dim=arguments.projection_dim, ret_emb=True, use_dropout=arguments.use_dropout, p_dropout=arguments.p_dropout)
 
     # Define the CosineContrastiveLoss with selected margins and animacy
+    label_to_animacy = build_label_to_animacy(cifar10_config["CIFAR10_CLASSES"], cifar10_config["ANIMACY"], cifar10_config["ANIMACY_MAPPING"])
     task_loss = CosineContrastiveLoss(
-        superclass=cifar10_config["ANIMACY"],
-        superclass_mapping=cifar10_config["ANIMACY_MAPPING"],
-        classnames=cifar10_config["CIFAR10_CLASSES"],
+        label_to_animacy=label_to_animacy,
         margin_same=arguments.margin_same,
         margin_diff=arguments.margin_diff
     )
