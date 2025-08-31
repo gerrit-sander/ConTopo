@@ -1,0 +1,49 @@
+{
+  "defaults": {
+    "python": "python",
+    "base_logdir": "logs",
+    "retries": 0
+  },
+  "experiments": [
+    {
+      "id": "cross-entropy",
+      "script": "main_ce.py",
+      "fixed_args": ["ws", "resnet18"],
+      "flags": { "epochs": 60 },
+      "grid": {
+        "trial": [0, 1],
+        "topographic_loss_rho": [0.0, 0.008, 0.04, 0.2, 1.0, 5.0]
+      }
+    },
+    {
+      "id": "cosine-contrastive",
+      "script": "main_coscontr.py",
+      "fixed_args": ["ws", "resnet18"],
+      "flags": { "epochs": 120 },
+      "grid": {
+        "trial": [0, 1],
+        "topographic_loss_rho": [0.0, 0.008, 0.04, 0.2, 1.0, 5.0]
+      }
+    },
+    {
+      "id": "supcon",
+      "script": "main_supcon.py",
+      "fixed_args": ["ws", "resnet18"],
+      "flags": { "epochs": 120 },
+      "grid": {
+        "trial": [0, 1],
+        "topographic_loss_rho": [0.0, 0.008, 0.04, 0.2, 1.0, 5.0]
+      }
+    },
+    {
+      "id": "simclr",
+      "script": "main_supcon.py",
+      "fixed_args": ["ws", "resnet18"],
+      "flags": { "epochs": 120, "task_method": "simclr" },
+      "grid": {
+        "trial": [0, 1],
+        "topographic_loss_rho": [0.0, 0.008, 0.04, 0.2, 1.0, 5.0]
+      }
+    }
+  ]
+}
