@@ -13,7 +13,6 @@ import time
 import os
 import sys
 import torch.optim as optim
-import math
 
 
 def parse_arguments():
@@ -32,10 +31,9 @@ def parse_arguments():
 
     # Optimization settings
     parser.add_argument('--epochs', type=int, default=10, help='number of epochs to train')
-    parser.add_argument('--batch_size', type=int, default=512, help='batch size for training')
+    parser.add_argument('--batch_size', type=int, default=128, help='batch size for training')
     parser.add_argument('--readout_epochs', type=int, default=20, help='number of epochs for readout training')
-    parser.add_argument('--learning_rate', type=float, default=0.25, help='learning rate')
-    parser.add_argument('--warm', action='store_true', help='warm-up for large batch training')
+    parser.add_argument('--learning_rate', type=float, default=0.001, help='learning rate')
 
     # Model Settings
     parser.add_argument('model_type', type=str, choices=['shallowcnn', 'resnet18'], help='type of model to use')
@@ -51,17 +49,6 @@ def parse_arguments():
     arguments.tensorboard_folder = f'./save/{subdir}/tensorboard/coscontr'
     arguments.dataset_folder = './dataset'
     arguments.save_freq = max(1, arguments.epochs // 10)  # Save every 10% of epochs, rounded up
-
-    # warm-up stage
-    if arguments.batch_size > 256:
-        arguments.warm = True
-    if arguments.warm:
-        arguments.warmup_from = 0.01
-        arguments.warm_epochs = 10
-        eta_min = arguments.learning_rate * 0.001
-        arguments.warmup_to = eta_min + (arguments.learning_rate - eta_min) * (1 + math.cos(math.pi * arguments.warm_epochs / arguments.epochs)) / 2
-    else:
-        arguments.warmup_to = arguments.learning_rate
     
     arguments.model_name = 'coscontr_{}topo_{}embdims_{}projdims_{}rho_{}epochs_{}bsz_nwork{}_readep{}_lr{}_margsame{}_margdiff{}_{}dropout'.format(
         arguments.topography_type,
@@ -194,14 +181,6 @@ def train(train_loader, model, task_loss, topographic_loss, optimizer, epoch, ar
         images = images.to(device, non_blocking=True)
         labels = labels.to(device, non_blocking=True)
         bsz = labels.shape[0]
-
-        # warm-up learning rate
-        if arguments.warm and epoch <= arguments.warm_epochs:
-            p = (idx + (epoch - 1) * len(train_loader)) / \
-                (arguments.warm_epochs * len(train_loader))
-            lr = arguments.warmup_from + p * (arguments.warmup_to - arguments.warmup_from)
-            for param_group in optimizer.param_groups:
-                param_group['lr'] = lr
 
         # forward pass through encoder + projection head
         embeddings, features = model(images)
@@ -353,11 +332,6 @@ def main():
     best_contrastive_loss = float('inf')
 
     for epoch in range(1, arguments.epochs + 1):
-        # learning rate adjustment
-        eta_min = arguments.learning_rate * 0.001
-        lr = eta_min + (arguments.learning_rate - eta_min) * (1 + math.cos(math.pi * epoch / arguments.epochs)) / 2
-        for param_group in optimizer.param_groups:
-            param_group['lr'] = lr
 
         time1 = time.time()
         avg_loss, avg_topoloss, avg_taskloss, avg_lambda_hat = train(
