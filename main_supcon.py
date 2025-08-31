@@ -350,7 +350,7 @@ def main():
     ### CONTRASTIVE LEARNING ###
     model, task_loss, topographic_loss = setup_model(arguments)
 
-    optimizer = optim.SGD(model.parameters(), lr=arguments.learning_rate, momentum=0.9, weight_decay=1e-4)
+    optimizer = optim.Adam(model.parameters(), lr=arguments.learning_rate)
     
     logger = tb_logger.Logger(logdir=arguments.tensorboard_folder, flush_secs=2)
 
@@ -451,9 +451,9 @@ def main():
     readout_model = EncoderWithLinear(model, linear_clf)
 
     readout_optimizer = optim.SGD(linear_clf.parameters(),
-                                  lr=arguments.learning_rate,
+                                  lr=0.1,
                                   momentum=0.9,
-                                  weight_decay=0.0)
+                                  weight_decay=1e-4)
 
     criterion_ce = torch.nn.CrossEntropyLoss()
     if torch.cuda.is_available():
