@@ -13,6 +13,7 @@ import time
 import os
 import sys
 import torch.optim as optim
+import math
 
 
 def parse_arguments():
@@ -34,6 +35,13 @@ def parse_arguments():
     parser.add_argument('--batch_size', type=int, default=128, help='batch size for training')
     parser.add_argument('--readout_epochs', type=int, default=20, help='number of epochs for readout training')
     parser.add_argument('--learning_rate', type=float, default=0.001, help='learning rate')
+
+    # Linear readout (probe) hyperparams
+    parser.add_argument('--readout_batch_size', type=int, default=1024, help='batch size for linear readout')
+    parser.add_argument('--readout_lr', type=float, default=3e-3, help='learning rate for linear readout (AdamW)')
+    parser.add_argument('--readout_weight_decay', type=float, default=0.01, help='weight decay for linear readout (AdamW)')
+    parser.add_argument('--readout_warmup_epochs', type=int, default=3, help='warmup epochs for linear readout scheduler')
+    parser.add_argument('--readout_min_lr', type=float, default=1e-5, help='final LR after cosine decay for linear readout')
 
     # Model Settings
     parser.add_argument('model_type', type=str, choices=['shallowcnn', 'resnet18'], help='type of model to use')
@@ -113,6 +121,57 @@ def cifar10_loader(arguments):
     )
 
     return train_loader, val_loader
+
+
+# Build single-view readout loaders (with separate batch size and simple augmentations)
+def build_readout_loaders(arguments):
+    """Single-view loaders for linear readout with its own batch size.
+    Train: RandomCrop(32, padding=4) + horizontal flip.
+    Val:   Plain ToTensor + normalize.
+    """
+    normalize = transforms.Normalize(mean=(0.4914, 0.4822, 0.4465), std=(0.2023, 0.1994, 0.2010))
+
+    train_transform_readout = transforms.Compose([
+        transforms.RandomCrop(32, padding=4),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+        normalize,
+    ])
+
+    val_transform_readout = transforms.Compose([
+        transforms.ToTensor(),
+        normalize,
+    ])
+
+    train_dataset_readout = datasets.CIFAR10(
+        root=arguments.dataset_folder,
+        train=True,
+        transform=train_transform_readout,
+        download=True,
+    )
+    val_dataset_readout = datasets.CIFAR10(
+        root=arguments.dataset_folder,
+        train=False,
+        transform=val_transform_readout,
+        download=True,
+    )
+
+    readout_train_loader = torch.utils.data.DataLoader(
+        train_dataset_readout,
+        batch_size=arguments.readout_batch_size,
+        shuffle=True,
+        num_workers=arguments.num_workers,
+        pin_memory=True,
+    )
+    readout_val_loader = torch.utils.data.DataLoader(
+        val_dataset_readout,
+        batch_size=arguments.readout_batch_size,
+        shuffle=False,
+        num_workers=arguments.num_workers,
+        pin_memory=True,
+    )
+
+    return readout_train_loader, readout_val_loader
 
 def setup_model(arguments):
 
@@ -403,6 +462,9 @@ def main():
     }
     save_checkpoint(os.path.join(arguments.model_folder, 'contrastive_last.pth'), final_contrastive)
 
+    # Build separate loaders for linear readout (single view, different batch size)
+    readout_train_loader, readout_val_loader = build_readout_loaders(arguments)
+
     ### LINEAR READOUT TRAINING ###
     # Freeze the pretrained encoder; keep it in eval for stable features
     for p in model.parameters():
@@ -427,10 +489,25 @@ def main():
 
     readout_model = EncoderWithLinear(model, linear_clf)
 
-    readout_optimizer = optim.SGD(linear_clf.parameters(),
-                                  lr=0.1,
-                                  momentum=0.9,
-                                  weight_decay=1e-4)
+    # AdamW linear probe per recipe A
+    readout_optimizer = optim.AdamW(
+        linear_clf.parameters(),
+        lr=arguments.readout_lr,
+        betas=(0.9, 0.999),
+        weight_decay=arguments.readout_weight_decay,
+    )
+
+    # Warmup (first readout_warmup_epochs) then cosine to readout_min_lr
+    def _lr_lambda(epoch):
+        if arguments.readout_warmup_epochs > 0 and epoch < arguments.readout_warmup_epochs:
+            return float(epoch + 1) / float(max(1, arguments.readout_warmup_epochs))
+        # cosine phase
+        t = (epoch - arguments.readout_warmup_epochs) / float(max(1, arguments.readout_epochs - arguments.readout_warmup_epochs))
+        cosine = 0.5 * (1.0 + math.cos(math.pi * min(1.0, max(0.0, t))))
+        min_ratio = arguments.readout_min_lr / max(arguments.readout_lr, 1e-12)
+        return min_ratio + (1.0 - min_ratio) * cosine
+
+    readout_scheduler = torch.optim.lr_scheduler.LambdaLR(readout_optimizer, lr_lambda=_lr_lambda)
 
     criterion_ce = torch.nn.CrossEntropyLoss()
     if torch.cuda.is_available():
@@ -446,7 +523,7 @@ def main():
         train_loss_meter = AverageMeter()
         end = time.time()
 
-        for idx, (images, labels) in enumerate(train_loader):
+        for idx, (images, labels) in enumerate(readout_train_loader):
             device = next(linear_clf.parameters()).device
             images = images.to(device, non_blocking=True)
             labels = labels.to(device, non_blocking=True)
@@ -463,7 +540,7 @@ def main():
 
             # periodic readout training log
             if (idx + 1) % arguments.print_freq == 0:
-                print(f'[Linear] Epoch: [{epoch}][{idx + 1}/{len(train_loader)}]\t'
+                print(f'[Linear] Epoch: [{epoch}][{idx + 1}/{len(readout_train_loader)}]\t'
                       f'Loss {train_loss_meter.val:.4f} ({train_loss_meter.avg:.4f})')
                 sys.stdout.flush()
 
@@ -471,7 +548,7 @@ def main():
         logger.log_value('linear_readout_train_loss', train_loss_meter.avg, epoch)
 
         # Validation of linear head on frozen features
-        val_loss, val_acc = validate(val_loader, readout_model, criterion_ce, arguments)
+        val_loss, val_acc = validate(readout_val_loader, readout_model, criterion_ce, arguments)
         last_val_acc = val_acc
         logger.log_value('linear_readout_val_loss', val_loss, epoch)
         logger.log_value('linear_readout_val_acc', val_acc, epoch)
@@ -507,6 +584,9 @@ def main():
                 os.path.join(arguments.model_folder, 'readout_best.pth'),
                 best_readout_state
             )
+        # step LR schedule once per epoch
+        readout_scheduler.step()
+        logger.log_value('linear_readout_lr', readout_optimizer.param_groups[0]['lr'], epoch)
 
     # Always save the final linear head snapshot
     save_checkpoint(
