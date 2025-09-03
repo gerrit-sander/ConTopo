@@ -2,7 +2,8 @@ import argparse
 from argparse import BooleanOptionalAction
 from torchvision import transforms
 from torchvision import datasets
-from utils.train import AverageMeter, save_checkpoint, unwrap, tb_logger, TwoCropTransform, grad_norm
+from torch.utils.data import Subset
+from utils.train import AverageMeter, save_checkpoint, unwrap, tb_logger, TwoCropTransform, grad_norm, split_cifar10_train_val_indices
 import torch
 import torch.backends.cudnn as cudnn
 from networks.shallowCNN import ProjectionShallowCNN, LinearClassifier
@@ -30,7 +31,7 @@ def parse_arguments():
     parser.add_argument('--topographic_loss_rho', type=float, default=0.05, help='balancing factor of the two losses')
 
     # Optimization settings
-    parser.add_argument('--epochs', type=int, default=10, help='number of epochs to train')
+    parser.add_argument('--epochs', type=int, default=250, help='number of epochs to train')
     parser.add_argument('--batch_size', type=int, default=128, help='batch size for training')
     parser.add_argument('--readout_epochs', type=int, default=20, help='number of epochs for readout training')
     parser.add_argument('--learning_rate', type=float, default=0.001, help='learning rate')
@@ -108,10 +109,18 @@ def cifar10_loader(arguments):
         normalize,
     ])
 
-    # Datasets
-    train_dataset = datasets.CIFAR10(root=arguments.dataset_folder, transform=TwoCropTransform(train_transform), download=True)
-    val_dataset = datasets.CIFAR10(root=arguments.dataset_folder, train=False, download=True, transform=val_transform)
-    val_dataset_contrastive = datasets.CIFAR10(root=arguments.dataset_folder, train=False, download=True, transform=TwoCropTransform(val_transform_contrastive))
+    # Indices for 45k/5k split from original train set
+    train_idx, val_idx = split_cifar10_train_val_indices(arguments.dataset_folder, val_per_class=500)
+
+    # Build separate base datasets to allow different transforms per split
+    base_train_twoview = datasets.CIFAR10(root=arguments.dataset_folder, train=True, transform=TwoCropTransform(train_transform), download=True)
+    base_val_classif = datasets.CIFAR10(root=arguments.dataset_folder, train=True, transform=val_transform, download=True)
+    base_val_twoview = datasets.CIFAR10(root=arguments.dataset_folder, train=True, transform=TwoCropTransform(val_transform_contrastive), download=True)
+
+    # Subsets
+    train_dataset = Subset(base_train_twoview, train_idx)
+    val_dataset = Subset(base_val_classif, val_idx)
+    val_dataset_contrastive = Subset(base_val_twoview, val_idx)
 
     # Loaders
     train_loader = torch.utils.data.DataLoader(
@@ -149,18 +158,30 @@ def build_readout_loaders(arguments):
         normalize,
     ])
 
-    train_dataset_readout = datasets.CIFAR10(
+    # 45k/5k split indices from train set
+    train_idx, val_idx = split_cifar10_train_val_indices(arguments.dataset_folder, val_per_class=500)
+
+    base_train_readout = datasets.CIFAR10(
         root=arguments.dataset_folder,
         train=True,
         transform=train_transform_readout,
         download=True,
     )
-    val_dataset_readout = datasets.CIFAR10(
+    base_val_readout = datasets.CIFAR10(
+        root=arguments.dataset_folder,
+        train=True,
+        transform=val_transform_readout,
+        download=True,
+    )
+    test_dataset_readout = datasets.CIFAR10(
         root=arguments.dataset_folder,
         train=False,
         transform=val_transform_readout,
         download=True,
     )
+
+    train_dataset_readout = Subset(base_train_readout, train_idx)
+    val_dataset_readout = Subset(base_val_readout, val_idx)
 
     readout_train_loader = torch.utils.data.DataLoader(
         train_dataset_readout,
@@ -176,8 +197,15 @@ def build_readout_loaders(arguments):
         num_workers=arguments.num_workers,
         pin_memory=True,
     )
+    readout_test_loader = torch.utils.data.DataLoader(
+        test_dataset_readout,
+        batch_size=arguments.readout_batch_size,
+        shuffle=False,
+        num_workers=arguments.num_workers,
+        pin_memory=True,
+    )
 
-    return readout_train_loader, readout_val_loader
+    return readout_train_loader, readout_val_loader, readout_test_loader
 
 def setup_model(arguments):
 
@@ -413,8 +441,11 @@ def main():
     logger = tb_logger.Logger(logdir=arguments.tensorboard_folder, flush_secs=2)
 
     best_contrastive_loss = float('inf')
+    epochs_no_improve = 0
+    es_patience = 5  # early stopping patience on validation total loss
 
     for epoch in range(1, arguments.epochs + 1):
+        prev_best = best_contrastive_loss
 
         time1 = time.time()
         avg_loss, avg_topoloss, avg_taskloss, avg_lambda_hat = train(
@@ -456,9 +487,9 @@ def main():
             ckpt_path = os.path.join(arguments.model_folder, f'contrastive_epoch{epoch:04d}.pth')
             save_checkpoint(ckpt_path, state)
 
-        # Track best model by lowest total loss
-        if avg_loss < best_contrastive_loss:
-            best_contrastive_loss = avg_loss
+        # Track best model by lowest VALIDATION total loss
+        if val_total_loss < best_contrastive_loss:
+            best_contrastive_loss = val_total_loss
             best_state = {
                 'stage': 'contrastive',
                 'epoch': epoch,
@@ -466,13 +497,22 @@ def main():
                 'optimizer': optimizer.state_dict(),
                 'args': vars(arguments),
                 'metrics': {
-                    'total_loss': avg_loss,
+                    'total_loss': val_total_loss,
                     'task_loss': avg_taskloss,
                     'topographic_loss': avg_topoloss,
                 }
             }
             best_path = os.path.join(arguments.model_folder, 'contrastive_best.pth')
             save_checkpoint(best_path, best_state)
+
+        # Early stopping check
+        if best_contrastive_loss < prev_best:
+            epochs_no_improve = 0
+        else:
+            epochs_no_improve += 1
+            if epochs_no_improve >= es_patience:
+                print(f'[Contrastive] Early stopping at epoch {epoch} (no val improvement for {es_patience} epochs).')
+                break
 
     # Always save the last contrastive snapshot (for resuming)
     final_contrastive = {
@@ -485,7 +525,7 @@ def main():
     save_checkpoint(os.path.join(arguments.model_folder, 'contrastive_last.pth'), final_contrastive)
 
     # Build separate loaders for linear readout (single view, different batch size)
-    readout_train_loader, readout_val_loader = build_readout_loaders(arguments)
+    readout_train_loader, readout_val_loader, readout_test_loader = build_readout_loaders(arguments)
 
     ### LINEAR READOUT TRAINING ###
     # Freeze the pretrained encoder; keep it in eval for stable features
@@ -537,6 +577,9 @@ def main():
 
     best_val_acc = 0.0
     last_val_acc = 0.0
+    epochs_no_improve = 0
+    es_patience = 5  # early stopping patience on val acc
+    best_linear_state_dict = None
 
     for epoch in range(1, arguments.readout_epochs + 1):
         readout_model.train()
@@ -573,7 +616,7 @@ def main():
         logger.log_value('linear_readout_train_loss', train_loss_meter.avg, epoch)
 
         # Validation of linear head on frozen features
-        val_loss, val_acc = validate(val_loader, readout_model, criterion_ce, arguments)
+        val_loss, val_acc = validate(readout_val_loader, readout_model, criterion_ce, arguments)
         last_val_acc = val_acc
         logger.log_value('linear_readout_val_loss', val_loss, epoch)
         logger.log_value('linear_readout_val_acc', val_acc, epoch)
@@ -596,6 +639,7 @@ def main():
         # Keep the best linear head by highest validation accuracy
         if val_acc > best_val_acc:
             best_val_acc = val_acc
+            epochs_no_improve = 0
             best_readout_state = {
                 'stage': 'linear_readout',
                 'epoch': epoch,
@@ -608,10 +652,18 @@ def main():
                 os.path.join(arguments.model_folder, 'readout_best.pth'),
                 best_readout_state
             )
+            # keep in-memory best for final test eval
+            import copy as _copy
+            best_linear_state_dict = _copy.deepcopy(linear_clf.state_dict())
+        else:
+            epochs_no_improve += 1
+            if epochs_no_improve >= es_patience:
+                print(f'[Linear] Early stopping at epoch {epoch} (no val acc improvement for {es_patience} epochs).')
+                break
         # step LR schedule once per epoch
         readout_scheduler.step()
         logger.log_value('linear_readout_lr', readout_optimizer.param_groups[0]['lr'], epoch)
-        
+    
     # Always save the final linear head snapshot
     save_checkpoint(
         os.path.join(arguments.model_folder, 'readout_last.pth'),
@@ -623,6 +675,16 @@ def main():
             'val_acc': last_val_acc,
         }
     )
+
+    # Final test evaluation with the BEST linear head
+    if best_linear_state_dict is not None:
+        linear_clf.load_state_dict(best_linear_state_dict)
+    test_ce = torch.nn.CrossEntropyLoss()
+    if torch.cuda.is_available():
+        test_ce = test_ce.cuda()
+    _, test_acc = validate(readout_test_loader, readout_model, test_ce, arguments)
+    print(f'[Linear] Final test accuracy (10k): {test_acc:.4f}')
+    logger.log_value('test_acc', test_acc, 0)
 
     if hasattr(logger, "close"):
         logger.close()

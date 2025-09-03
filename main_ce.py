@@ -2,7 +2,8 @@ import argparse
 from argparse import BooleanOptionalAction
 from torchvision import transforms
 from torchvision import datasets
-from utils.train import AverageMeter, save_checkpoint, unwrap, accuracy, tb_logger, grad_norm
+from torch.utils.data import Subset
+from utils.train import AverageMeter, save_checkpoint, unwrap, accuracy, tb_logger, grad_norm, split_cifar10_train_val_indices
 import torch
 import torch.backends.cudnn as cudnn
 from networks.shallowCNN import LinearShallowCNN
@@ -27,7 +28,7 @@ def parse_arguments():
     parser.add_argument('--topographic_loss_rho', type=float, default=0.05, help='balancing factor of the two losses')
 
     # Optimization settings
-    parser.add_argument('--epochs', type=int, default=30, help='number of epochs to train')
+    parser.add_argument('--epochs', type=int, default=125, help='number of epochs to train')
     parser.add_argument('--batch_size', type=int, default=128, help='batch size for training')
     parser.add_argument('--learning_rate', type=float, default=0.001, help='learning rate')
 
@@ -85,38 +86,17 @@ def cifar10_loader(arguments):
         normalize,
     ])
 
-    # Load the full training split (50k) to construct our own train/val split
-    full_train = datasets.CIFAR10(root=arguments.dataset_folder, train=True, download=True)
-    targets = full_train.targets if hasattr(full_train, 'targets') else full_train.train_labels
-
-    num_classes = 10
-    per_class_val = 500  # 500 images per class => 5k total for validation
-
-    # Deterministic split per trial id
-    g = torch.Generator()
-    g.manual_seed(12345 + int(arguments.trial))
-
-    val_indices = []
-    train_indices = []
-    for c in range(num_classes):
-        cls_idx = [i for i, t in enumerate(targets) if int(t) == c]
-        perm = torch.randperm(len(cls_idx), generator=g).tolist()
-        val_c = [cls_idx[i] for i in perm[:per_class_val]]
-        train_c = [cls_idx[i] for i in perm[per_class_val:]]
-        val_indices.extend(val_c)
-        train_indices.extend(train_c)
-
-    assert len(val_indices) == num_classes * per_class_val, f"Expected {num_classes * per_class_val} val samples, got {len(val_indices)}"
-    assert len(train_indices) == len(targets) - len(val_indices), "Train size mismatch"
+    # 45k/5k split from the CIFAR-10 train split (500 per class for val)
+    train_indices, val_indices = split_cifar10_train_val_indices(arguments.dataset_folder, val_per_class=500)
 
     # Datasets with appropriate transforms
-    train_dataset = datasets.CIFAR10(root=arguments.dataset_folder, train=True, transform=train_transform)
-    val_dataset = datasets.CIFAR10(root=arguments.dataset_folder, train=True, transform=val_transform)
+    train_dataset = datasets.CIFAR10(root=arguments.dataset_folder, train=True, transform=train_transform, download=True)
+    val_dataset = datasets.CIFAR10(root=arguments.dataset_folder, train=True, transform=val_transform, download=True)
     test_dataset = datasets.CIFAR10(root=arguments.dataset_folder, train=False, download=True, transform=val_transform)
 
     # Subsets for our split
-    train_subset = torch.utils.data.Subset(train_dataset, train_indices)
-    val_subset = torch.utils.data.Subset(val_dataset, val_indices)
+    train_subset = Subset(train_dataset, train_indices)
+    val_subset = Subset(val_dataset, val_indices)
 
     # DataLoaders
     train_loader = torch.utils.data.DataLoader(
@@ -331,6 +311,8 @@ def main():
     # Track best model by validation accuracy
     best_val_acc = 0.0
     last_val_acc = 0.0
+    epochs_no_improve = 0
+    es_patience = 5  # early stopping patience based on validation accuracy
 
     # Adapter that makes the model return logits only (validate() expects logits)
     class LogitsOnly(torch.nn.Module):
@@ -346,6 +328,7 @@ def main():
     logits_model = LogitsOnly(model)
 
     for epoch in range(1, arguments.epochs + 1):
+        prev_best = best_val_acc
 
         time1 = time.time()
         # Train end-to-end with CE; topo term handled inside train()
@@ -406,6 +389,15 @@ def main():
             }
             best_path = os.path.join(arguments.model_folder, 'e2e_best.pth')
             save_checkpoint(best_path, best_state)
+
+        # Early stopping check based on validation accuracy
+        if best_val_acc > prev_best:
+            epochs_no_improve = 0
+        else:
+            epochs_no_improve += 1
+            if epochs_no_improve >= es_patience:
+                print(f'[CE] Early stopping at epoch {epoch} (no val acc improvement for {es_patience} epochs).')
+                break
 
     # Always save a final "last" snapshot for e2e training (for resume/export)
     final_e2e = {

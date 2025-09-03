@@ -2,6 +2,7 @@ import yaml
 import os
 import torch
 from torch.utils.tensorboard import SummaryWriter
+from torchvision import datasets
 
 class TwoCropTransform:
     """
@@ -98,3 +99,27 @@ def grad_norm(loss, params):
         return torch.tensor(0.0, device=loss.device)
     v = torch.cat(flat)
     return torch.linalg.norm(v, ord=2)
+
+def split_cifar10_train_val_indices(root, val_per_class=500):
+    """
+    Build a deterministic 45k/5k split from the CIFAR-10 train split.
+    Picks the first `val_per_class` samples per class (by original order) for validation.
+
+    Returns:
+        (train_indices, val_indices): two sorted lists of indices into the CIFAR-10 train set.
+    """
+    base = datasets.CIFAR10(root=root, train=True, transform=None, download=True)
+    targets = base.targets if hasattr(base, 'targets') else base.train_labels
+    class_counts = {c: 0 for c in range(10)}
+    val_idx = []
+    for idx, y in enumerate(targets):
+        y_int = int(y)
+        if class_counts[y_int] < val_per_class:
+            val_idx.append(idx)
+            class_counts[y_int] += 1
+        if all(class_counts[c] >= val_per_class for c in range(10)):
+            break
+    all_idx = set(range(len(targets)))
+    train_idx = sorted(list(all_idx.difference(val_idx)))
+    val_idx = sorted(val_idx)
+    return train_idx, val_idx
