@@ -79,17 +79,48 @@ def cifar10_loader(arguments):
     
     # Data augmentations for more diversity in training
     train_transform = transforms.Compose([
-    transforms.RandomResizedCrop(size=32, scale=(0.2, 1.)),
-    transforms.RandomHorizontalFlip(),
-    transforms.ToTensor(),
-    normalize,
+        transforms.RandomResizedCrop(size=32, scale=(0.2, 1.)),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+        normalize,
     ])
 
-    train_dataset = datasets.CIFAR10(root=arguments.dataset_folder, transform=train_transform, download=True)
-    val_dataset = datasets.CIFAR10(root=arguments.dataset_folder, train=False, download=True, transform=val_transform)
-    
+    # Load the full training split (50k) to construct our own train/val split
+    full_train = datasets.CIFAR10(root=arguments.dataset_folder, train=True, download=True)
+    targets = full_train.targets if hasattr(full_train, 'targets') else full_train.train_labels
+
+    num_classes = 10
+    per_class_val = 500  # 500 images per class => 5k total for validation
+
+    # Deterministic split per trial id
+    g = torch.Generator()
+    g.manual_seed(12345 + int(arguments.trial))
+
+    val_indices = []
+    train_indices = []
+    for c in range(num_classes):
+        cls_idx = [i for i, t in enumerate(targets) if int(t) == c]
+        perm = torch.randperm(len(cls_idx), generator=g).tolist()
+        val_c = [cls_idx[i] for i in perm[:per_class_val]]
+        train_c = [cls_idx[i] for i in perm[per_class_val:]]
+        val_indices.extend(val_c)
+        train_indices.extend(train_c)
+
+    assert len(val_indices) == num_classes * per_class_val, f"Expected {num_classes * per_class_val} val samples, got {len(val_indices)}"
+    assert len(train_indices) == len(targets) - len(val_indices), "Train size mismatch"
+
+    # Datasets with appropriate transforms
+    train_dataset = datasets.CIFAR10(root=arguments.dataset_folder, train=True, transform=train_transform)
+    val_dataset = datasets.CIFAR10(root=arguments.dataset_folder, train=True, transform=val_transform)
+    test_dataset = datasets.CIFAR10(root=arguments.dataset_folder, train=False, download=True, transform=val_transform)
+
+    # Subsets for our split
+    train_subset = torch.utils.data.Subset(train_dataset, train_indices)
+    val_subset = torch.utils.data.Subset(val_dataset, val_indices)
+
+    # DataLoaders
     train_loader = torch.utils.data.DataLoader(
-        train_dataset,
+        train_subset,
         batch_size=arguments.batch_size,
         shuffle=True,
         num_workers=arguments.num_workers,
@@ -97,13 +128,22 @@ def cifar10_loader(arguments):
     )
 
     val_loader = torch.utils.data.DataLoader(
-        val_dataset, 
-        batch_size=arguments.batch_size, 
+        val_subset,
+        batch_size=arguments.batch_size,
         shuffle=False,
-        num_workers=arguments.num_workers, 
-        pin_memory=True)
-    
-    return train_loader, val_loader
+        num_workers=arguments.num_workers,
+        pin_memory=True,
+    )
+
+    test_loader = torch.utils.data.DataLoader(
+        test_dataset,
+        batch_size=arguments.batch_size,
+        shuffle=False,
+        num_workers=arguments.num_workers,
+        pin_memory=True,
+    )
+
+    return train_loader, val_loader, test_loader
 
 def setup_model(arguments):
 
@@ -280,7 +320,7 @@ def validate(val_loader, model, criterion, arguments):
 def main():
     arguments = parse_arguments()
 
-    train_loader, val_loader = cifar10_loader(arguments)
+    train_loader, val_loader, test_loader = cifar10_loader(arguments)
 
     model, task_loss, topographic_loss = setup_model(arguments)
 
@@ -377,7 +417,20 @@ def main():
         'val_acc': last_val_acc,
     }
     save_checkpoint(os.path.join(arguments.model_folder, 'e2e_last.pth'), final_e2e)
-    
+
+    # Final single evaluation on the held-out test set using the best-val checkpoint
+    best_path = os.path.join(arguments.model_folder, 'e2e_best.pth')
+    try:
+        device = next(model.parameters()).device
+        ckpt = torch.load(best_path, map_location=device)
+        unwrap(model).load_state_dict(ckpt['state_dict'])
+    except Exception as e:
+        print(f'Warning: failed to load best checkpoint from {best_path}: {e}')
+
+    test_loss, test_acc = validate(test_loader, logits_model, task_loss, arguments)
+    logger.log_value('test_acc', test_acc, arguments.epochs)
+    print('Final Test Acc@1 {:.3f}'.format(test_acc))
+
     if hasattr(logger, "close"):
         logger.close()
 
