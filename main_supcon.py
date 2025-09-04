@@ -441,11 +441,13 @@ def main():
     logger = tb_logger.Logger(logdir=arguments.tensorboard_folder, flush_secs=2)
 
     best_contrastive_loss = float('inf')
+    best_val_task_loss = float('inf')
     epochs_no_improve = 0
     es_patience = 5  # early stopping patience on validation total loss
 
     for epoch in range(1, arguments.epochs + 1):
         prev_best = best_contrastive_loss
+        prev_best_task = best_val_task_loss
 
         time1 = time.time()
         avg_loss, avg_topoloss, avg_taskloss, avg_lambda_hat = train(
@@ -455,6 +457,7 @@ def main():
             val_contrastive_loader, model, task_loss, topographic_loss, arguments
         )
 
+        # Early stopping and best tracking should use only the task validation loss
         val_total_loss = val_task_loss + avg_lambda_hat * val_topo_loss
 
         logger.log_value('val_task_loss', val_task_loss, epoch)
@@ -505,8 +508,12 @@ def main():
             best_path = os.path.join(arguments.model_folder, 'contrastive_best.pth')
             save_checkpoint(best_path, best_state)
 
-        # Early stopping check
-        if best_contrastive_loss < prev_best:
+        # Update best task-only loss for early stopping
+        if val_task_loss < best_val_task_loss:
+            best_val_task_loss = val_task_loss
+
+        # Early stopping check (task-only validation loss)
+        if best_val_task_loss < prev_best_task:
             epochs_no_improve = 0
         else:
             epochs_no_improve += 1
