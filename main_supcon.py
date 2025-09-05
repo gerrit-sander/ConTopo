@@ -450,7 +450,7 @@ def main():
     best_contrastive_loss = float('inf')
     best_val_task_loss = float('inf')
     epochs_no_improve = 0
-    es_patience = 5  # early stopping patience on validation total loss
+    es_patience = 25  # early stopping patience on validation total loss
 
     for epoch in range(1, arguments.epochs + 1):
         prev_best = best_contrastive_loss
