@@ -34,7 +34,7 @@ def parse_arguments():
     # Optimization settings
     parser.add_argument('--epochs', type=int, default=250, help='number of epochs to train')
     parser.add_argument('--batch_size', type=int, default=512, help='batch size for training')
-    parser.add_argument('--readout_epochs', type=int, default=20, help='number of epochs for readout training')
+    parser.add_argument('--readout_epochs', type=int, default=200, help='number of epochs for readout training')
     parser.add_argument('--learning_rate', type=float, default=0.002, help='learning rate (scaled for larger batch)')
 
     # Linear readout (probe) hyperparams
