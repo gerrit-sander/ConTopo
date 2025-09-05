@@ -33,12 +33,12 @@ def parse_arguments():
 
     # Optimization settings
     parser.add_argument('--epochs', type=int, default=250, help='number of epochs to train')
-    parser.add_argument('--batch_size', type=int, default=128, help='batch size for training')
+    parser.add_argument('--batch_size', type=int, default=512, help='batch size for training')
     parser.add_argument('--readout_epochs', type=int, default=20, help='number of epochs for readout training')
-    parser.add_argument('--learning_rate', type=float, default=0.001, help='learning rate')
+    parser.add_argument('--learning_rate', type=float, default=0.002, help='learning rate (scaled for larger batch)')
 
     # Linear readout (probe) hyperparams
-    parser.add_argument('--readout_batch_size', type=int, default=1024, help='batch size for linear readout')
+    parser.add_argument('--readout_batch_size', type=int, default=2048, help='batch size for linear readout')
     parser.add_argument('--readout_lr', type=float, default=3e-3, help='learning rate for linear readout (AdamW)')
     parser.add_argument('--readout_weight_decay', type=float, default=0.01, help='weight decay for linear readout (AdamW)')
     parser.add_argument('--readout_warmup_epochs', type=int, default=3, help='warmup epochs for linear readout scheduler')
@@ -416,7 +416,7 @@ def main():
     best_contrastive_loss = float('inf')
     best_val_task_loss = float('inf')
     epochs_no_improve = 0
-    es_patience = 5  # early stopping patience on validation total loss
+    es_patience = 25  # early stopping patience on validation total loss
 
     for epoch in range(1, arguments.epochs + 1):
         prev_best = best_contrastive_loss

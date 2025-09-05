@@ -29,8 +29,8 @@ def parse_arguments():
 
     # Optimization settings
     parser.add_argument('--epochs', type=int, default=125, help='number of epochs to train')
-    parser.add_argument('--batch_size', type=int, default=128, help='batch size for training')
-    parser.add_argument('--learning_rate', type=float, default=0.001, help='learning rate')
+    parser.add_argument('--batch_size', type=int, default=512, help='batch size for training')
+    parser.add_argument('--learning_rate', type=float, default=0.002, help='learning rate (scaled for larger batch)')
 
     # Model Settings
     parser.add_argument('model_type', type=str, choices=['shallowcnn', 'resnet18'], help='type of model to use')
@@ -312,7 +312,7 @@ def main():
     best_val_acc = 0.0
     last_val_acc = 0.0
     epochs_no_improve = 0
-    es_patience = 5  # early stopping patience based on validation accuracy
+    es_patience = 25  # early stopping patience based on validation accuracy
 
     # Adapter that makes the model return logits only (validate() expects logits)
     class LogitsOnly(torch.nn.Module):

@@ -32,12 +32,12 @@ def parse_arguments():
 
     # Optimization settings
     parser.add_argument('--epochs', type=int, default=250, help='number of epochs to train')
-    parser.add_argument('--batch_size', type=int, default=128, help='batch size for training')
+    parser.add_argument('--batch_size', type=int, default=512, help='batch size for training')
     parser.add_argument('--readout_epochs', type=int, default=20, help='number of epochs for readout training')
-    parser.add_argument('--learning_rate', type=float, default=0.001, help='learning rate')
+    parser.add_argument('--learning_rate', type=float, default=0.002, help='learning rate (scaled for larger batch)')
 
     # Linear readout (probe) hyperparams
-    parser.add_argument('--readout_batch_size', type=int, default=1024, help='batch size for linear readout')
+    parser.add_argument('--readout_batch_size', type=int, default=2048, help='batch size for linear readout')
     parser.add_argument('--readout_lr', type=float, default=3e-3, help='learning rate for linear readout (AdamW)')
     parser.add_argument('--readout_weight_decay', type=float, default=0.01, help='weight decay for linear readout (AdamW)')
     parser.add_argument('--readout_warmup_epochs', type=int, default=3, help='warmup epochs for linear readout scheduler')
@@ -92,11 +92,13 @@ def cifar10_loader(arguments):
     ])
     
     # Training augmentations (two views for contrastive)
+    # Add Gaussian blur per SimCLR recipe to strengthen invariances.
     train_transform = transforms.Compose([
         transforms.RandomResizedCrop(size=32, scale=(0.2, 1.)),
         transforms.RandomHorizontalFlip(),
         transforms.RandomApply([transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)], p=0.8),
         transforms.RandomGrayscale(p=0.2),
+        transforms.RandomApply([transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 2.0))], p=0.5),
         transforms.ToTensor(),
         normalize,
     ])
@@ -216,7 +218,12 @@ def setup_model(arguments):
         model = ProjectionResNet18(emb_dim=arguments.embedding_dim, feat_dim=arguments.projection_dim, ret_emb=True, use_dropout=arguments.use_dropout, p_dropout=arguments.p_dropout)
 
     # Select the task loss (SupConLoss implements both SupCon loss and SimCLR loss)
-    task_loss = SupConLoss(temperature=0.07)
+    # Temperature: use 0.07 for SupCon and for SimCLR with large batches; 0.1 for smaller SimCLR batches.
+    if arguments.task_method == 'simclr':
+        temp = 0.07 if arguments.batch_size >= 512 else 0.1
+    else:
+        temp = 0.07
+    task_loss = SupConLoss(temperature=temp)
 
     # Select the topographic loss type
     if arguments.topography_type == 'global':
@@ -585,7 +592,7 @@ def main():
     best_val_acc = 0.0
     last_val_acc = 0.0
     epochs_no_improve = 0
-    es_patience = 5  # early stopping patience on val acc
+    es_patience = 25  # early stopping patience on val acc
     best_linear_state_dict = None
 
     for epoch in range(1, arguments.readout_epochs + 1):
