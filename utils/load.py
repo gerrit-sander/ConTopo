@@ -186,6 +186,66 @@ def load_encoder_from_path(path: str, device: str, prefer: str, dp: bool):
         )
     return encoder, meta
 
+def _dir_contains_ckpts(d: str) -> bool:
+    if not os.path.isdir(d):
+        return False
+    for name in os.listdir(d):
+        if name.endswith('.pth') or name.endswith('.pt') or name.endswith('.ckpt'):
+            return True
+    return False
+
+def list_run_folders_from_model_folder(model_folder: str) -> list[str]:
+    """
+    Given a model folder that may aggregate multiple trials, return a list of
+    run folders (each containing checkpoints).
+
+    Handles both layouts:
+    - Nested trials: <model_folder>/trial_00, trial_01, ... (each with *.pth)
+    - Flat trial folder: <model_folder> itself contains *.pth
+    """
+    model_folder = os.path.abspath(model_folder)
+    if _dir_contains_ckpts(model_folder):
+        return [model_folder]
+    # Otherwise, look for immediate child dirs that contain checkpoints
+    runs: list[str] = []
+    for name in sorted(os.listdir(model_folder)):
+        d = os.path.join(model_folder, name)
+        if os.path.isdir(d) and _dir_contains_ckpts(d):
+            runs.append(d)
+    if runs:
+        return runs
+    raise FileNotFoundError(
+        f"No checkpoints found under model folder: {model_folder}. "
+        "Expected *.pth files directly or inside subfolders (e.g., trial_00)."
+    )
+
+def load_encoders_from_model_folder(
+    model_folder: str,
+    prefer: str = "best",
+    device: str | torch.device | None = None,
+    dp_if_multi_gpu: bool = False,
+    eval_mode: bool = True,
+    strict: bool = True,
+):
+    """
+    Load encoders for all trials inside a given model folder.
+
+    Returns a list of (encoder, meta) for each discovered run folder.
+    """
+    run_folders = list_run_folders_from_model_folder(model_folder)
+    out = []
+    for run in run_folders:
+        enc, meta = load_encoder_from_run_folder(
+            run_folder=run,
+            prefer=prefer,
+            device=device,
+            dp_if_multi_gpu=dp_if_multi_gpu,
+            eval_mode=eval_mode,
+            strict=strict,
+        )
+        out.append((enc, meta))
+    return out
+
 def parse_model_load_args():
     parser = argparse.ArgumentParser(
         description="Load a trained encoder (from CE or contrastive) and run eval-time experiments."
