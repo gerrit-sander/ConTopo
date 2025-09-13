@@ -199,6 +199,7 @@ def main():
                 xj_n = xj_c.norm().clamp_min(eps)
                 r = float((xi_c @ xj_c) / (xi_n * xj_n))
                 corrs.append(r)
+        stats_path = os.path.join(model_folder, f"RDMConsistency_{base}.pt")
         if corrs:
             import math as _m
             mean_corr = sum(corrs) / len(corrs)
@@ -207,11 +208,22 @@ def main():
                 std_corr = _m.sqrt(var)
             else:
                 std_corr = 0.0
-            print(f"RDM consistency across trials — mean: {mean_corr:.6f}, std: {std_corr:.6f}")
+            torch.save({
+                "mean": float(mean_corr),
+                "std": float(std_corr),
+                "num_pairs": len(corrs),
+                "num_trials": len(rdms),
+                "note": "Pairwise Pearson correlation of upper-triangle (no diagonal)."
+            }, stats_path)
         else:
-            print("RDM consistency across trials — insufficient pairs to compute correlation.")
+            torch.save({
+                "num_pairs": 0,
+                "num_trials": len(rdms),
+                "message": "Insufficient pairs to compute correlation."
+            }, stats_path)
+        print(f"Saved RDM consistency stats to: {stats_path}")
     else:
-        print("RDM consistency across trials — need at least 2 trials.")
+        print("RDM consistency across trials — need at least 2 trials. Skipping stats save.")
 
     # Save all trial RDMs (upper triangle only)
     payload = {
