@@ -79,6 +79,14 @@ def _pearson_rdm(X: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
     return rdm
 
 
+def _upper_triangle_vector(M: torch.Tensor, include_diagonal: bool = True) -> torch.Tensor:
+    """Return the upper-triangular values of square matrix M as a 1D tensor."""
+    N = M.size(0)
+    offset = 0 if include_diagonal else 1
+    idx = torch.triu_indices(N, N, offset=offset)
+    return M[idx[0], idx[1]].to(dtype=torch.float32, device="cpu")
+
+
 def main():
     args = parse_model_load_args()
 
@@ -127,18 +135,10 @@ def main():
     out_name = f"RDM_{base}.pt"
     out_path = os.path.join(model_folder, out_name)
 
-    payload = {
-        "rdms": rdms,               # list of [1000, 1000] float32 tensors (CPU)
-        "labels": labels,           # list[int] length 1000, class labels of rows/cols
-        "metas": metas,             # minimal metadata per trial
-        "model_folder": model_folder,
-        "prefer": args.prefer,
-    }
-    torch.save(payload, out_path)
-    print(f"Saved {len(rdms)} RDMs to: {out_path}")
+    # Compute averaged RDM across trials (full matrix for plotting), then compress for saving
+    avg_rdm = torch.stack(rdms, dim=0).mean(dim=0) if len(rdms) > 0 else None
 
-    # Also save a corresponding figure for each RDM in the same folder
-    # Name pattern: RDM_<base>__<runname>.png (fallback to index if unavailable)
+    # Save per-trial figures (full RDMs for visualization)
     for idx, (rdm, meta) in enumerate(zip(rdms, metas)):
         try:
             run_folder = os.path.dirname(meta.get("ckpt_path", ""))
@@ -159,6 +159,91 @@ def main():
         plt.savefig(fig_path, dpi=200, bbox_inches="tight")
         plt.close()
         print(f"Saved RDM figure: {fig_path}")
+
+    # Save averaged RDM figure if available
+    if avg_rdm is not None:
+        avg_fig_name = f"AvgRDM_{base}.png"
+        avg_fig_path = os.path.join(model_folder, avg_fig_name)
+        plt.figure(figsize=(8, 8))
+        im = plt.imshow(avg_rdm.numpy(), cmap="viridis", interpolation="nearest")
+        plt.title("Average RDM across trials")
+        plt.xlabel("Samples (N=1000)")
+        plt.ylabel("Samples (N=1000)")
+        plt.colorbar(im, fraction=0.046, pad=0.04, label="1 - Pearson r")
+        plt.tight_layout()
+        plt.savefig(avg_fig_path, dpi=200, bbox_inches="tight")
+        plt.close()
+        print(f"Saved Avg RDM figure: {avg_fig_path}
+")
+
+    # Compress RDMs to upper-triangular vectors for saving (saves space)
+    rdms_upper = [
+        _upper_triangle_vector(rdm, include_diagonal=True) for rdm in rdms
+    ]
+    avg_rdm_upper = _upper_triangle_vector(avg_rdm, include_diagonal=True) if avg_rdm is not None else None
+
+    # Second-level analysis: correlate RDMs across trials (unique pairs, exclude self)
+    # Use upper-triangle vectors WITHOUT the diagonal for correlation to avoid trivial zeros.
+    if len(rdms) >= 2:
+        vecs_no_diag = [
+            _upper_triangle_vector(rdm, include_diagonal=False) for rdm in rdms
+        ]
+        corrs = []
+        eps = 1e-8
+        for i in range(len(vecs_no_diag)):
+            xi = vecs_no_diag[i]
+            xi_c = xi - xi.mean()
+            xi_n = xi_c.norm().clamp_min(eps)
+            for j in range(i + 1, len(vecs_no_diag)):
+                xj = vecs_no_diag[j]
+                xj_c = xj - xj.mean()
+                xj_n = xj_c.norm().clamp_min(eps)
+                r = float((xi_c @ xj_c) / (xi_n * xj_n))
+                corrs.append(r)
+        if corrs:
+            import math as _m
+            mean_corr = sum(corrs) / len(corrs)
+            if len(corrs) > 1:
+                var = sum((c - mean_corr) ** 2 for c in corrs) / (len(corrs) - 1)
+                std_corr = _m.sqrt(var)
+            else:
+                std_corr = 0.0
+            print(f"RDM consistency across trials — mean: {mean_corr:.6f}, std: {std_corr:.6f}")
+        else:
+            print("RDM consistency across trials — insufficient pairs to compute correlation.")
+    else:
+        print("RDM consistency across trials — need at least 2 trials.")
+
+    # Save all trial RDMs (upper triangle only)
+    payload = {
+        "rdms_upper": rdms_upper,   # list of length n; each is 1D tensor (upper triangle incl. diag)
+        "N": 1000,                  # original matrix size
+        "include_diagonal": True,
+        "labels": labels,           # list[int] length 1000
+        "metas": metas,             # minimal metadata per trial
+        "model_folder": model_folder,
+        "prefer": args.prefer,
+    }
+    torch.save(payload, out_path)
+    print(f"Saved {len(rdms_upper)} upper-triangular RDMs to: {out_path}")
+
+    # Save averaged RDM (upper triangle only) in a separate file
+    if avg_rdm_upper is not None:
+        avg_name = f"AvgRDM_{base}.pt"
+        avg_path = os.path.join(model_folder, avg_name)
+        avg_payload = {
+            "avg_rdm_upper": avg_rdm_upper,
+            "N": 1000,
+            "include_diagonal": True,
+            "labels": labels,
+            "num_trials": len(rdms_upper),
+            "model_folder": model_folder,
+            "prefer": args.prefer,
+        }
+        torch.save(avg_payload, avg_path)
+        print(f"Saved averaged upper-triangular RDM to: {avg_path}")
+
+    # (Figures saved above.)
 
 
 if __name__ == "__main__":
