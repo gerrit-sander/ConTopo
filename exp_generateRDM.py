@@ -14,28 +14,36 @@ def _select_deterministic_cifar10_subset(val_loader, per_class: int = 100):
     Deterministically collect exactly `per_class` samples for each of the 10 CIFAR-10 classes
     from the evaluation loader (which is ordered and not shuffled).
 
-    Returns a single stacked tensor of images [1000, C, H, W] and a list of labels (length 1000).
+    Returns images stacked in CLASS-GROUPED order ([1000, C, H, W]) and labels where the
+    first 100 belong to class 0, next 100 to class 1, ..., last 100 to class 9.
     """
-    class_quota = {i: per_class for i in range(10)}
-    imgs_out, labs_out = [], []
+    imgs_by_class = {i: [] for i in range(10)}
 
     with torch.no_grad():
         for imgs, labs in val_loader:
-            # Iterate samples in order; take until class quotas are met
             for img, lab in zip(imgs, labs):
                 c = int(lab)
-                if class_quota[c] > 0:
-                    imgs_out.append(img)
-                    labs_out.append(c)
-                    class_quota[c] -= 1
-                    # Early exit if all quotas reached
-                    if all(v == 0 for v in class_quota.values()):
-                        stacked = torch.stack(imgs_out, dim=0)
-                        return stacked, labs_out
+                lst = imgs_by_class[c]
+                if len(lst) < per_class:
+                    lst.append(img)
+            # Early exit if all classes are filled
+            if all(len(lst) >= per_class for lst in imgs_by_class.values()):
+                break
 
-    # If we exit loop without meeting quotas, raise
-    missing = {k: v for k, v in class_quota.items() if v > 0}
-    raise RuntimeError(f"Could not collect required samples per class; missing: {missing}")
+    # Verify and stack in class order 0..9
+    for c in range(10):
+        if len(imgs_by_class[c]) < per_class:
+            raise RuntimeError(f"Could not collect required samples for class {c}: "
+                               f"got {len(imgs_by_class[c])}, need {per_class}")
+
+    ordered_imgs = []
+    ordered_labels = []
+    for c in range(10):
+        ordered_imgs.extend(imgs_by_class[c][:per_class])
+        ordered_labels.extend([c] * per_class)
+
+    stacked = torch.stack(ordered_imgs, dim=0)
+    return stacked, ordered_labels
 
 
 def _compute_embeddings(encoder: torch.nn.Module, images: torch.Tensor, device: torch.device, batch_size: int) -> torch.Tensor:
