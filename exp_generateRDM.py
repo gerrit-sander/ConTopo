@@ -173,8 +173,7 @@ def main():
         plt.tight_layout()
         plt.savefig(avg_fig_path, dpi=200, bbox_inches="tight")
         plt.close()
-        print(f"Saved Avg RDM figure: {avg_fig_path}
-")
+        print(f"Saved Avg RDM figure: {avg_fig_path}")
 
     # Compress RDMs to upper-triangular vectors for saving (saves space)
     rdms_upper = [
