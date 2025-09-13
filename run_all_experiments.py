@@ -33,12 +33,25 @@ def collect_checkpoints(repo_root: Path) -> list[Path]:
 
 
 def collect_modeldirs(repo_root: Path) -> list[Path]:
-    """Return immediate subdirectories under <repo_root>/save/models as relative paths."""
-    models_root = repo_root / "save" / "models"
-    if not models_root.exists():
+    """
+    Return immediate subdirectories under any '<repo_root>/save/**/models' directory.
+    Each returned path is relative to repo_root and represents a model folder.
+    """
+    save_root = repo_root / "save"
+    if not save_root.exists():
         return []
-    dirs = [p for p in models_root.iterdir() if p.is_dir()]
-    return sorted(p.relative_to(repo_root) for p in dirs)
+    modeldir_paths: set[Path] = set()
+    for models_root in save_root.rglob("models"):
+        if not models_root.is_dir():
+            continue
+        for child in models_root.iterdir():
+            if child.is_dir():
+                try:
+                    modeldir_paths.add(child.relative_to(repo_root))
+                except ValueError:
+                    # Fallback: store absolute if not under repo_root
+                    modeldir_paths.add(child.resolve())
+    return sorted(modeldir_paths)
 
 
 def main():
@@ -72,7 +85,7 @@ def main():
         item_kind = "model folder"
 
     if not items:
-        where = save_dir if args.mode == "checkpoint" else (save_dir / "models")
+        where = (str(save_dir)) if args.mode == "checkpoint" else f"{save_dir}/**/models"
         sys.exit(f"No {item_kind}s found under {where}")
 
     print(f"Found {len(items)} {item_kind}(s).")
