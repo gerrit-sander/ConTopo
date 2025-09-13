@@ -1,5 +1,6 @@
 import os
 import torch
+import matplotlib.pyplot as plt
 
 from utils.load import (
     parse_model_load_args,
@@ -127,6 +128,29 @@ def main():
     }
     torch.save(payload, out_path)
     print(f"Saved {len(rdms)} RDMs to: {out_path}")
+
+    # Also save a corresponding figure for each RDM in the same folder
+    # Name pattern: RDM_<base>__<runname>.png (fallback to index if unavailable)
+    for idx, (rdm, meta) in enumerate(zip(rdms, metas)):
+        try:
+            run_folder = os.path.dirname(meta.get("ckpt_path", ""))
+            run_name = os.path.basename(run_folder) if run_folder else f"trial_{idx:02d}"
+        except Exception:
+            run_name = f"trial_{idx:02d}"
+
+        fig_name = f"RDM_{base}__{run_name}.png"
+        fig_path = os.path.join(model_folder, fig_name)
+
+        plt.figure(figsize=(8, 8))
+        im = plt.imshow(rdm.numpy(), cmap="viridis", interpolation="nearest")
+        plt.title(f"RDM: {run_name}")
+        plt.xlabel("Samples (N=1000)")
+        plt.ylabel("Samples (N=1000)")
+        plt.colorbar(im, fraction=0.046, pad=0.04, label="1 - Pearson r")
+        plt.tight_layout()
+        plt.savefig(fig_path, dpi=200, bbox_inches="tight")
+        plt.close()
+        print(f"Saved RDM figure: {fig_path}")
 
 
 if __name__ == "__main__":
