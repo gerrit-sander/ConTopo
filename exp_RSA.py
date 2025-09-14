@@ -112,6 +112,14 @@ def main():
         action="store_true",
         help="Skip model folders whose RDM vector length does not match the first encountered length.",
     )
+    parser.add_argument(
+        "--exclude-substring",
+        default="0.0_dropout",
+        help=(
+            "Produce a second set of outputs excluding rows whose model folder name contains this substring. "
+            "Default: '0.0_dropout'."
+        ),
+    )
     args = parser.parse_args()
 
     models_root = os.path.abspath(args.models_root)
@@ -158,7 +166,8 @@ def main():
             else:
                 raise ValueError(msg)
 
-        start_idx = len(all_rows)
+        # Global row index starts at total rows aggregated so far
+        start_idx = sum(chunk.shape[0] for chunk in all_rows)
         all_rows.append(T)
         for i in range(n):
             index_rows.append({
@@ -203,6 +212,49 @@ def main():
     print(f"Saved tensor payload: {out_pt}")
     print(f"Saved index CSV:     {out_idx_csv}")
     print(f"Saved consistency CSV: {out_cons_csv}")
+
+    # Also produce a filtered variant excluding models that contain the given substring
+    excl = args.exclude_substring
+    if excl:
+        keep_indices = [i for i, row in enumerate(index_rows) if excl not in row["model"]]
+        if not keep_indices:
+            print(f"[WARN] No rows remain after excluding models containing '{excl}'. Skipping filtered outputs.")
+            return
+
+        big_f = big[keep_indices, :]
+        index_rows_f = []
+        for new_idx, old_idx in enumerate(keep_indices):
+            row = index_rows[old_idx]
+            index_rows_f.append({
+                "global_index": new_idx,
+                "model": row["model"],
+                "trial_index": row["trial_index"],
+            })
+
+        tag = excl.replace(os.sep, "_")
+        suffix = f"no_{tag}"
+
+        out_pt_f = os.path.join(models_root, f"{args.output_prefix}_AllRDMs_{suffix}.pt")
+        payload_f = {
+            "matrix": big_f,
+            "index": index_rows_f,
+            "vector_length": big_f.shape[1],
+            "note": (
+                "Filtered: rows excluded where 'model' contains '" + excl + "'. "
+                "Upper-triangular RDM vectors concatenated across remaining models and trials."
+            ),
+        }
+        torch.save(payload_f, out_pt_f)
+
+        out_idx_csv_f = os.path.join(models_root, f"{args.output_prefix}_AllRDMs_index_{suffix}.csv")
+        with open(out_idx_csv_f, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=["global_index", "model", "trial_index"]) 
+            writer.writeheader()
+            for row in index_rows_f:
+                writer.writerow(row)
+
+        print(f"Saved filtered tensor payload: {out_pt_f}")
+        print(f"Saved filtered index CSV:     {out_idx_csv_f}")
 
 
 if __name__ == "__main__":
