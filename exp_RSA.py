@@ -4,6 +4,7 @@ import csv
 from typing import List, Tuple, Dict, Any
 
 import torch
+import matplotlib.pyplot as plt
 
 
 def _find_model_folders(models_root: str) -> List[str]:
@@ -255,6 +256,45 @@ def main():
 
         print(f"Saved filtered tensor payload: {out_pt_f}")
         print(f"Saved filtered index CSV:     {out_idx_csv_f}")
+
+        # --- Second-level RSA over filtered rows ---
+        # Ensure consistent dimensionality
+        assert big_f.ndim == 2, f"Expected 2D tensor, got shape {tuple(big_f.shape)}"
+        g_f, m_f = big_f.shape
+        if g_f >= 1:
+            # Pearson correlation across rows: center each row, normalize, then dot-product
+            X = big_f.to(dtype=torch.float32, device="cpu")
+            Xc = X - X.mean(dim=1, keepdim=True)
+            eps = 1e-8
+            norms = Xc.norm(dim=1, keepdim=True).clamp_min(eps)
+            Y = Xc / norms
+            rsa_mat = Y @ Y.t()  # [g_f, g_f]
+            # Numeric hygiene: clamp to [-1, 1]
+            rsa_mat = rsa_mat.clamp(-1.0, 1.0)
+
+            # Save matrix with shape-specific prefix
+            rsa_pt = os.path.join(models_root, f"{args.output_prefix}_{g_f}x{g_f}.pt")
+            torch.save({
+                "rsa_matrix": rsa_mat,  # [g, g]
+                "index": index_rows_f,  # matches row/col order
+                "note": "Pearson correlation over upper-triangular RDM vectors (filtered)",
+            }, rsa_pt)
+
+            # Save heatmap
+            rsa_png = os.path.join(models_root, f"{args.output_prefix}_{g_f}x{g_f}.png")
+            plt.figure(figsize=(8, 7))
+            im = plt.imshow(rsa_mat.numpy(), cmap="viridis", vmin=-1.0, vmax=1.0, interpolation="nearest")
+            plt.title(f"Model-by-model RSA (g={g_f})")
+            plt.xlabel("RDM index")
+            plt.ylabel("RDM index")
+            cbar = plt.colorbar(im, fraction=0.046, pad=0.04)
+            cbar.set_label("Pearson r")
+            plt.tight_layout()
+            plt.savefig(rsa_png, dpi=200, bbox_inches="tight")
+            plt.close()
+
+            print(f"Saved RSA matrix: {rsa_pt}")
+            print(f"Saved RSA heatmap: {rsa_png}")
 
 
 if __name__ == "__main__":
