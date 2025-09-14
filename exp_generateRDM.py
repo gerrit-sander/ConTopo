@@ -175,11 +175,11 @@ def main():
         plt.close()
         print(f"Saved Avg RDM figure: {avg_fig_path}")
 
-    # Compress RDMs to upper-triangular vectors for saving (saves space)
+    # Compress RDMs to upper-triangular vectors for saving (exclude diagonal to avoid trivial zeros)
     rdms_upper = [
-        _upper_triangle_vector(rdm, include_diagonal=True) for rdm in rdms
+        _upper_triangle_vector(rdm, include_diagonal=False) for rdm in rdms
     ]
-    avg_rdm_upper = _upper_triangle_vector(avg_rdm, include_diagonal=True) if avg_rdm is not None else None
+    avg_rdm_upper = _upper_triangle_vector(avg_rdm, include_diagonal=False) if avg_rdm is not None else None
 
     # Second-level analysis: correlate RDMs across trials (unique pairs, exclude self)
     # Use upper-triangle vectors WITHOUT the diagonal for correlation to avoid trivial zeros.
@@ -229,7 +229,7 @@ def main():
     payload = {
         "rdms_upper": rdms_upper,   # list of length n; each is 1D tensor (upper triangle incl. diag)
         "N": 1000,                  # original matrix size
-        "include_diagonal": True,
+        "include_diagonal": False,
         "labels": labels,           # list[int] length 1000
         "metas": metas,             # minimal metadata per trial
         "model_folder": model_folder,
@@ -245,7 +245,7 @@ def main():
         avg_payload = {
             "avg_rdm_upper": avg_rdm_upper,
             "N": 1000,
-            "include_diagonal": True,
+            "include_diagonal": False,
             "labels": labels,
             "num_trials": len(rdms_upper),
             "model_folder": model_folder,
