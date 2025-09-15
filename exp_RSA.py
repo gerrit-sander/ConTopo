@@ -115,10 +115,10 @@ def main():
     )
     parser.add_argument(
         "--exclude-substring",
-        default="0.0_dropout",
+        default="0.0dropout",
         help=(
             "Produce a second set of outputs excluding rows whose model folder name contains this substring. "
-            "Default: '0.0_dropout'."
+            "Default: '0.0dropout'."
         ),
     )
     args = parser.parse_args()
