@@ -1,4 +1,5 @@
 import os
+import re
 import argparse
 import csv
 from typing import List, Tuple, Dict, Any
@@ -125,6 +126,17 @@ def main():
 
     models_root = os.path.abspath(args.models_root)
     model_folders = _find_model_folders(models_root)
+    # Sort model folders hierarchically: by loss tag, then numeric rho ascending, then name
+    def _sort_key(path: str) -> Tuple[str, float, str]:
+        name = os.path.basename(path.rstrip(os.sep))
+        # loss tag assumed to be prefix before first underscore
+        loss_tag = name.split("_", 1)[0]
+        # extract numeric rho between underscores followed by 'rho'
+        m = re.search(r"_(\d+(?:\.\d+)?)rho(?:_|$)", name)
+        rho_val = float(m.group(1)) if m else float("inf")
+        return (loss_tag, rho_val, name)
+
+    model_folders = sorted(model_folders, key=_sort_key)
     if not model_folders:
         raise SystemExit(f"No model folders found under: {models_root}")
 
