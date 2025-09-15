@@ -69,6 +69,8 @@ def main():
     parser = argparse.ArgumentParser(description="Build model-by-model RSA over unaveraged RDMs.")
     parser.add_argument("models_root", nargs="?", default=".")
     parser.add_argument("--output-prefix", default="RSA")
+    parser.add_argument("--trials-per-model", type=int, default=5,
+                        help="Number of trials per model for collapsing (block-average). Default: 5")
     args = parser.parse_args()
 
     models_root = os.path.abspath(args.models_root)
@@ -146,7 +148,38 @@ def main():
     plt.savefig(png_path, dpi=200, bbox_inches="tight")
     plt.close()
 
+    # Optionally collapse across trials by simple block-averaging (e.g., 5x5 blocks)
+    t = int(args.trials_per_model)
+    if t > 0 and g % t == 0:
+        n_models = g // t
+        # reshape to [models, trials, models, trials] and mean over trial dims
+        rsa_collapsed = rsa.reshape(n_models, t, n_models, t).mean(dim=(1, 3))
+
+        # Save collapsed matrix
+        rsa_c_pt = os.path.join(models_root, f"{args.output_prefix}_collapsed_{n_models}x{n_models}.pt")
+        torch.save({
+            "rsa_matrix_collapsed": rsa_collapsed,
+            "trials_per_model": t,
+            "original_shape": (g, g),
+            "collapsed_shape": (n_models, n_models),
+        }, rsa_c_pt)
+
+        # Plot collapsed heatmap
+        png_c_path = os.path.join(models_root, f"{args.output_prefix}_collapsed_{n_models}x{n_models}.png")
+        plt.figure(figsize=(7, 6))
+        im = plt.imshow(rsa_collapsed.numpy(), cmap="viridis", vmin=-1.0, vmax=1.0, interpolation="nearest")
+        plt.title(f"Model-by-model RSA collapsed ({n_models}x{n_models}, {t} trials avg)")
+        plt.xlabel("model index")
+        plt.ylabel("model index")
+        cbar = plt.colorbar(im, fraction=0.046, pad=0.04)
+        cbar.set_label("Pearson r (avg)")
+        plt.tight_layout()
+        plt.savefig(png_c_path, dpi=200, bbox_inches="tight")
+        plt.close()
+    else:
+        # If not divisible, skip quietly per the "keep it simple" request
+        pass
+
 
 if __name__ == "__main__":
     main()
-
