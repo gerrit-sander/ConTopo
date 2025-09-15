@@ -186,13 +186,23 @@ def load_encoder_from_path(path: str, device: str, prefer: str, dp: bool):
         )
     return encoder, meta
 
-def _dir_contains_ckpts(d: str) -> bool:
+EXPECTED_CKPT_NAMES = {
+    "contrastive_best.pth",
+    "contrastive_last.pth",
+    "e2e_best.pth",
+    "e2e_last.pth",
+}
+
+
+def _dir_contains_expected_ckpts(d: str) -> bool:
+    """Return True only if directory has one of the expected run checkpoint files."""
     if not os.path.isdir(d):
         return False
-    for name in os.listdir(d):
-        if name.endswith('.pth') or name.endswith('.pt') or name.endswith('.ckpt'):
-            return True
-    return False
+    try:
+        entries = os.listdir(d)
+    except FileNotFoundError:
+        return False
+    return any(name in EXPECTED_CKPT_NAMES for name in entries)
 
 def list_run_folders_from_model_folder(model_folder: str) -> list[str]:
     """
@@ -204,13 +214,14 @@ def list_run_folders_from_model_folder(model_folder: str) -> list[str]:
     - Flat trial folder: <model_folder> itself contains *.pth
     """
     model_folder = os.path.abspath(model_folder)
-    if _dir_contains_ckpts(model_folder):
+    # If the model folder itself contains expected checkpoint files, treat it as a run folder.
+    if _dir_contains_expected_ckpts(model_folder):
         return [model_folder]
     # Otherwise, look for immediate child dirs that contain checkpoints
     runs: list[str] = []
     for name in sorted(os.listdir(model_folder)):
         d = os.path.join(model_folder, name)
-        if os.path.isdir(d) and _dir_contains_ckpts(d):
+        if os.path.isdir(d) and _dir_contains_expected_ckpts(d):
             runs.append(d)
     if runs:
         return runs
