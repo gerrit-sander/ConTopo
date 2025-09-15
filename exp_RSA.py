@@ -96,6 +96,7 @@ def main():
     index_rows: List[Dict[str, Any]] = []
     vec_len: int | None = None
 
+    kept_models_meta: List[Dict[str, Any]] = []  # aligned with appended rows/models
     for folder in model_folders:
         name = os.path.basename(folder.rstrip(os.sep))
         T = _load_unaveraged_rdms(folder)  # [n, m]
@@ -109,6 +110,11 @@ def main():
 
         start = sum(t.shape[0] for t in rows)
         rows.append(T)
+        # Capture meta for this model (once per model)
+        loss = name.split("_", 1)[0]
+        m_rho = re.search(r"_(\d+(?:\.\d+)?)rho(?:_|$)", name)
+        rho_val = float(m_rho.group(1)) if m_rho else float("inf")
+        kept_models_meta.append({"name": name, "loss": loss, "rho": rho_val})
         for i in range(n):
             index_rows.append({"global_index": start + i, "model": name, "trial_index": i})
 
@@ -176,6 +182,98 @@ def main():
         plt.tight_layout()
         plt.savefig(png_c_path, dpi=200, bbox_inches="tight")
         plt.close()
+
+        # Further collapses: by rho (6x6) and by task loss (4x4)
+        # Build grouping indices aligned with model order used above
+        if len(kept_models_meta) != n_models:
+            # Safety guard; if mismatch, skip further collapsing
+            pass
+        else:
+            # Group indices by loss and by rho
+            loss_to_indices: Dict[str, List[int]] = {}
+            rho_to_indices: Dict[float, List[int]] = {}
+            for idx, meta in enumerate(kept_models_meta):
+                loss_to_indices.setdefault(meta["loss"], []).append(idx)
+                rho_to_indices.setdefault(meta["rho"], []).append(idx)
+
+            # Preserve appearance order for losses; rhos will follow first-appearance order (typically ascending)
+            loss_labels: List[str] = []
+            seen_losses = set()
+            for meta in kept_models_meta:
+                if meta["loss"] not in seen_losses:
+                    loss_labels.append(meta["loss"])
+                    seen_losses.add(meta["loss"])
+
+            rho_values: List[float] = []
+            seen_rhos = set()
+            for meta in kept_models_meta:
+                if meta["rho"] not in seen_rhos:
+                    rho_values.append(meta["rho"])
+                    seen_rhos.add(meta["rho"])
+
+            # Collapse by rho (group by rho only) -> R x R
+            R = len(rho_values)
+            if R >= 2:
+                rsa_by_rho = torch.empty((R, R), dtype=rsa_collapsed.dtype)
+                for i, r_i in enumerate(rho_values):
+                    idx_i = rho_to_indices[r_i]
+                    rows_i = rsa_collapsed[idx_i, :]
+                    for j, r_j in enumerate(rho_values):
+                        idx_j = rho_to_indices[r_j]
+                        block = rows_i[:, idx_j]
+                        rsa_by_rho[i, j] = block.mean()
+
+                # Save and plot
+                rsa_rho_pt = os.path.join(models_root, f"{args.output_prefix}_collapsed_by_rho_{R}x{R}.pt")
+                torch.save({
+                    "rsa_matrix_by_rho": rsa_by_rho,
+                    "rho_values": rho_values,
+                    "original_models": [m["name"] for m in kept_models_meta],
+                }, rsa_rho_pt)
+
+                png_rho_path = os.path.join(models_root, f"{args.output_prefix}_collapsed_by_rho_{R}x{R}.png")
+                plt.figure(figsize=(7, 6))
+                im = plt.imshow(rsa_by_rho.numpy(), cmap="viridis", vmin=-1.0, vmax=1.0, interpolation="nearest")
+                plt.title(f"RSA collapsed by rho ({R}x{R})")
+                plt.xlabel("rho index")
+                plt.ylabel("rho index")
+                cbar = plt.colorbar(im, fraction=0.046, pad=0.04)
+                cbar.set_label("Pearson r (avg)")
+                plt.tight_layout()
+                plt.savefig(png_rho_path, dpi=200, bbox_inches="tight")
+                plt.close()
+
+            # Collapse by task loss (group by loss only) -> L x L
+            L = len(loss_labels)
+            if L >= 2:
+                rsa_by_loss = torch.empty((L, L), dtype=rsa_collapsed.dtype)
+                for i, loss_i in enumerate(loss_labels):
+                    idx_i = loss_to_indices[loss_i]
+                    rows_i = rsa_collapsed[idx_i, :]
+                    for j, loss_j in enumerate(loss_labels):
+                        idx_j = loss_to_indices[loss_j]
+                        block = rows_i[:, idx_j]
+                        rsa_by_loss[i, j] = block.mean()
+
+                # Save and plot
+                rsa_loss_pt = os.path.join(models_root, f"{args.output_prefix}_collapsed_by_loss_{L}x{L}.pt")
+                torch.save({
+                    "rsa_matrix_by_loss": rsa_by_loss,
+                    "loss_labels": loss_labels,
+                    "original_models": [m["name"] for m in kept_models_meta],
+                }, rsa_loss_pt)
+
+                png_loss_path = os.path.join(models_root, f"{args.output_prefix}_collapsed_by_loss_{L}x{L}.png")
+                plt.figure(figsize=(7, 6))
+                im = plt.imshow(rsa_by_loss.numpy(), cmap="viridis", vmin=-1.0, vmax=1.0, interpolation="nearest")
+                plt.title(f"RSA collapsed by loss ({L}x{L})")
+                plt.xlabel("loss index")
+                plt.ylabel("loss index")
+                cbar = plt.colorbar(im, fraction=0.046, pad=0.04)
+                cbar.set_label("Pearson r (avg)")
+                plt.tight_layout()
+                plt.savefig(png_loss_path, dpi=200, bbox_inches="tight")
+                plt.close()
     else:
         # If not divisible, skip quietly per the "keep it simple" request
         pass
