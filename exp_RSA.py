@@ -195,6 +195,50 @@ def main():
     big = torch.cat(all_rows, dim=0)  # [g, m]
     g, m = big.shape
 
+    # Derive and save model order summary (first appearance order)
+    def _loss_rho_from_name(name: str) -> Tuple[str, float]:
+        loss_tag = name.split("_", 1)[0]
+        m = re.search(r"_(\d+(?:\.\d+)?)rho(?:_|$)", name)
+        rho_val = float(m.group(1)) if m else float("inf")
+        return loss_tag, rho_val
+
+    seen_models: set[str] = set()
+    models_in_order: List[str] = []
+    for row in index_rows:
+        mname = row["model"]
+        if mname not in seen_models:
+            seen_models.add(mname)
+            models_in_order.append(mname)
+
+    # Sanity check: rho ascending within each loss group
+    def _check_and_write_model_order(models: List[str], out_csv_path: str) -> None:
+        from collections import defaultdict
+        # count trials per model
+        trial_counts: Dict[str, int] = defaultdict(int)
+        for r in index_rows:
+            trial_counts[r["model"]] += 1
+
+        # write order csv
+        with open(out_csv_path, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["loss", "rho", "model", "n_trials"])
+            for mname in models:
+                loss, rho = _loss_rho_from_name(mname)
+                writer.writerow([loss, rho, mname, trial_counts.get(mname, 0)])
+
+        # check ordering
+        groups: Dict[str, List[float]] = {}
+        for mname in models:
+            loss, rho = _loss_rho_from_name(mname)
+            groups.setdefault(loss, []).append(rho)
+        for loss, rhos in groups.items():
+            asc = sorted(rhos)
+            if rhos != asc:
+                print(f"[WARN] Rho order not ascending for loss='{loss}' in unfiltered set: {rhos} (expected {asc})")
+
+    out_order_csv = os.path.join(models_root, f"{args.output_prefix}_ModelOrder.csv")
+    _check_and_write_model_order(models_in_order, out_order_csv)
+
     # Save aggregated tensor and index mapping as a .pt payload
     out_pt = os.path.join(models_root, f"{args.output_prefix}_AllRDMs.pt")
     payload = {
@@ -224,6 +268,7 @@ def main():
     print(f"Aggregated RDMs: {g} trials across {len(model_folders)} model folders")
     print(f"Saved tensor payload: {out_pt}")
     print(f"Saved index CSV:     {out_idx_csv}")
+    print(f"Saved model order CSV: {out_order_csv}")
     print(f"Saved consistency CSV: {out_cons_csv}")
 
     # Also produce a filtered variant excluding models that contain the given substring
@@ -266,8 +311,43 @@ def main():
             for row in index_rows_f:
                 writer.writerow(row)
 
+        # Save filtered model-order report and check ordering
+        seen_models_f: set[str] = set()
+        models_in_order_f: List[str] = []
+        for row in index_rows_f:
+            mname = row["model"]
+            if mname not in seen_models_f:
+                seen_models_f.add(mname)
+                models_in_order_f.append(mname)
+
+        out_order_csv_f = os.path.join(models_root, f"{args.output_prefix}_ModelOrder_{suffix}.csv")
+        # Reuse the checker, but count trials within filtered set
+        def _check_and_write_model_order_filtered(models: List[str], out_csv_path: str) -> None:
+            from collections import defaultdict
+            trial_counts_f: Dict[str, int] = defaultdict(int)
+            for r in index_rows_f:
+                trial_counts_f[r["model"]] += 1
+            with open(out_csv_path, "w", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow(["loss", "rho", "model", "n_trials"])
+                for mname in models:
+                    loss, rho = _loss_rho_from_name(mname)
+                    writer.writerow([loss, rho, mname, trial_counts_f.get(mname, 0)])
+            # check ordering
+            groups_f: Dict[str, List[float]] = {}
+            for mname in models:
+                loss, rho = _loss_rho_from_name(mname)
+                groups_f.setdefault(loss, []).append(rho)
+            for loss, rhos in groups_f.items():
+                asc = sorted(rhos)
+                if rhos != asc:
+                    print(f"[WARN] Rho order not ascending for loss='{loss}' in filtered set: {rhos} (expected {asc})")
+
+        _check_and_write_model_order_filtered(models_in_order_f, out_order_csv_f)
+
         print(f"Saved filtered tensor payload: {out_pt_f}")
         print(f"Saved filtered index CSV:     {out_idx_csv_f}")
+        print(f"Saved filtered model order CSV: {out_order_csv_f}")
 
         # --- Second-level RSA over filtered rows ---
         # Ensure consistent dimensionality
