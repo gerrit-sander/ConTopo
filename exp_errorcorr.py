@@ -91,7 +91,20 @@ def _load_readout_model(run: str, prefer: str, device: torch.device) -> torch.nn
     ).to(device)
     classifier.load_state_dict(state_dict, strict=True)
 
-    contrastive_path = _pick_ckpt(run, prefer, _CONTRASTIVE_BEST, _CONTRASTIVE_LAST)
+    # Linear readouts in `main_supcon.py` are trained on top of the encoder *as it stood at
+    # the end of contrastive training (the "last" snapshot), not the validation-best one.
+    # Pairing `readout_best.pth` with `contrastive_best.pth` therefore evaluates a
+    # mismatched encoder/head combination and can tank accuracy (observed primarily for
+    # SimCLR). Prefer the "last" encoder weights here and fall back to other choices only
+    # if that file is missing.
+    contrastive_path = None
+    for candidate in ("contrastive_last.pth", "contrastive_best.pth"):
+        path = os.path.join(run, candidate)
+        if os.path.isfile(path):
+            contrastive_path = path
+            break
+    if contrastive_path is None:
+        contrastive_path = _pick_ckpt(run, prefer, _CONTRASTIVE_BEST, _CONTRASTIVE_LAST)
     if contrastive_path is None:
         raise FileNotFoundError(f"No contrastive checkpoint found for {run}")
 
