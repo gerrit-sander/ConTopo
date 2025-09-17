@@ -135,15 +135,16 @@ def _load_model_for_run(run: str, prefer: str, device: torch.device) -> torch.nn
         return None
 
 
-def _collect_errors_and_preds(
+def _collect_errors_preds_logits(
     model: torch.nn.Module,
     loader: torch.utils.data.DataLoader,
     device: torch.device,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     total = len(loader.dataset)
     errors = torch.zeros(total, dtype=torch.float32)
-    preds = torch.empty(total, dtype=torch.long)
     targets = torch.empty(total, dtype=torch.long)
+    logits_store: torch.Tensor | None = None
+    preds = torch.empty(total, dtype=torch.long)
     offset = 0
 
     with torch.no_grad():
@@ -155,16 +156,24 @@ def _collect_errors_and_preds(
             logits = model(images)
             if isinstance(logits, (tuple, list)):
                 logits = logits[-1]
-            batch_preds = logits.argmax(dim=1)
-            batch_errors = (batch_preds != labels).float().cpu()
+            if logits_store is None:
+                logits_store = torch.empty(total, logits.size(1), dtype=torch.float32)
+            batch_logits = logits.detach().cpu()
+            labels_cpu = labels.cpu()
+            batch_preds = batch_logits.argmax(dim=1)
+            batch_errors = (batch_preds != labels_cpu).float()
 
             size = batch_errors.numel()
             errors[offset : offset + size] = batch_errors
-            preds[offset : offset + size] = batch_preds.cpu()
-            targets[offset : offset + size] = labels.cpu()
+            preds[offset : offset + size] = batch_preds
+            targets[offset : offset + size] = labels_cpu
+            logits_store[offset : offset + size] = batch_logits
             offset += size
 
-    return errors, preds, targets
+    if logits_store is None:
+        raise RuntimeError("No logits collected; empty loader?")
+
+    return errors, preds, targets, logits_store
 
 
 def _pearson_corrcoef(error_matrix: torch.Tensor) -> torch.Tensor:
@@ -201,7 +210,7 @@ def main() -> None:
     )
 
     errors_all: list[torch.Tensor] = []
-    preds_all: list[torch.Tensor] = []
+    logits_all: list[torch.Tensor] = []
     labels_ref: torch.Tensor | None = None
     counts: list[int] = []
     run_names: list[str] = []
@@ -212,14 +221,14 @@ def main() -> None:
             print(f"Skipping {run}: no suitable checkpoint found.")
             continue
 
-        errors, preds, labels = _collect_errors_and_preds(model, loader, device)
+        errors, preds, labels, logits = _collect_errors_preds_logits(model, loader, device)
         if labels_ref is None:
             labels_ref = labels
         elif not torch.equal(labels_ref, labels):
             raise RuntimeError("Mismatched label ordering across trials.")
 
         errors_all.append(errors)
-        preds_all.append(preds)
+        logits_all.append(logits)
         counts.append(int(errors.sum().item()))
         run_names.append(os.path.basename(run.rstrip(os.sep)))
 
@@ -252,10 +261,11 @@ def main() -> None:
         print("Pairwise mean: nan")
         print("Pairwise std: nan")
 
-    if labels_ref is not None and preds_all:
-        pred_matrix = torch.stack(preds_all)
-        votes = torch.mode(pred_matrix, dim=0).values
-        ensemble_acc = float((votes == labels_ref).float().mean().item())
+    if labels_ref is not None and logits_all:
+        logits_matrix = torch.stack(logits_all)
+        mean_logits = logits_matrix.mean(dim=0)
+        ensemble_preds = mean_logits.argmax(dim=1)
+        ensemble_acc = float((ensemble_preds == labels_ref).float().mean().item())
         print(f"Ensemble accuracy: {ensemble_acc}")
 
 
