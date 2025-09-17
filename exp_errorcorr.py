@@ -204,6 +204,7 @@ def main() -> None:
     preds_all: list[torch.Tensor] = []
     labels_ref: torch.Tensor | None = None
     counts: list[int] = []
+    accuracies: list[float] = []
     run_names: list[str] = []
 
     for run in runs:
@@ -221,6 +222,7 @@ def main() -> None:
         errors_all.append(errors)
         preds_all.append(preds)
         counts.append(int(errors.sum().item()))
+        accuracies.append(float((preds == labels).float().mean().item()))
         run_names.append(os.path.basename(run.rstrip(os.sep)))
 
     if not errors_all:
@@ -230,6 +232,10 @@ def main() -> None:
     print("Error counts per trial:")
     for name, count in zip(run_names, counts):
         print(f"{name}: {count}")
+
+    print("Individual accuracies:")
+    for name, acc in zip(run_names, accuracies):
+        print(f"{name}: {acc:.4f}")
 
     error_matrix = torch.stack(errors_all)
     corr = _pearson_corrcoef(error_matrix)
