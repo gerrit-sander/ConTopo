@@ -271,8 +271,11 @@ def parse_model_load_args():
     parser.add_argument(
         "--prefer",
         choices=["best", "last"],
-        default="best",
-        help="When 'path' is a run folder, choose which checkpoint to load.",
+        default="last",
+        help=(
+            "When 'path' is a run folder, choose which checkpoint to load. "
+            "Default: 'last' so experiments reuse the encoder frozen for linear readout."
+        ),
     )
     parser.add_argument(
         "--device",

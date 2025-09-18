@@ -8,7 +8,8 @@ from utils.train import unwrap
 def main():
     args = parse_model_load_args()
     # Load all encoders from the provided model folder (one per trial),
-    # selecting the best/last validation checkpoint per run when available.
+    # selecting the checkpoint indicated by --prefer (defaults to 'last' so we
+    # reuse the encoder paired with the trained readout head).
     encoders_meta = load_encoders_from_model_folder(
         model_folder=args.path,
         prefer=args.prefer,
