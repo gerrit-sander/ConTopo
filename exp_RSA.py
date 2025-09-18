@@ -116,7 +116,7 @@ def main():
         m_rho = re.search(r"_(\d+(?:\.\d+)?)rho(?:_|$)", name)
         rho_val = float(m_rho.group(1)) if m_rho else float("inf")
         kept_models_meta.append({"name": name, "loss": loss, "rho": rho_val})
-        stats_path = os.path.join(folder, f"RDMConsistency_{base}.pt")
+        stats_path = os.path.join(folder, f"RDMConsistency_{name}.pt")
         if os.path.isfile(stats_path):
             stats = torch.load(stats_path, map_location="cpu")
         else:
