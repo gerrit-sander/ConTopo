@@ -97,6 +97,7 @@ def main():
     vec_len: int | None = None
 
     kept_models_meta: List[Dict[str, Any]] = []  # aligned with appended rows/models
+    consistency_rows: List[Dict[str, Any]] = []
     for folder in model_folders:
         name = os.path.basename(folder.rstrip(os.sep))
         T = _load_unaveraged_rdms(folder)  # [n, m]
@@ -115,6 +116,19 @@ def main():
         m_rho = re.search(r"_(\d+(?:\.\d+)?)rho(?:_|$)", name)
         rho_val = float(m_rho.group(1)) if m_rho else float("inf")
         kept_models_meta.append({"name": name, "loss": loss, "rho": rho_val})
+        stats_path = os.path.join(folder, f"RDMConsistency_{base}.pt")
+        if os.path.isfile(stats_path):
+            stats = torch.load(stats_path, map_location="cpu")
+        else:
+            stats = {}
+        consistency_rows.append({
+            "model": name,
+            "mean": float(stats["mean"]) if "mean" in stats else "",
+            "std": float(stats["std"]) if "std" in stats else "",
+            "num_pairs": int(stats["num_pairs"]) if "num_pairs" in stats else "",
+            "num_trials": int(stats["num_trials"]) if "num_trials" in stats else "",
+            "message": stats.get("message", ""),
+        })
         for i in range(n):
             index_rows.append({"global_index": start + i, "model": name, "trial_index": i})
 
@@ -140,6 +154,13 @@ def main():
         writer = csv.DictWriter(f, fieldnames=["global_index", "model", "trial_index"]) 
         writer.writeheader()
         for row in index_rows:
+            writer.writerow(row)
+
+    consistency_csv = os.path.join(models_root, f"{args.output_prefix}_consistency.csv")
+    with open(consistency_csv, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=["model", "mean", "std", "num_pairs", "num_trials", "message"])
+        writer.writeheader()
+        for row in consistency_rows:
             writer.writerow(row)
 
     png_path = os.path.join(models_root, f"{args.output_prefix}_{g}x{g}.png")
