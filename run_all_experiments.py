@@ -1,110 +1,120 @@
-"""
-Run an experiment over saved models.
+"""Run one experiment script for every model folder inside a root directory.
 
-Modes:
-  - checkpoint: run <experiment>.py for every checkpoint file under REPO_ROOT/save (default)
-  - modeldir:   run <experiment>.py for every immediate subfolder under REPO_ROOT/save/models
+Usage
+-----
+    python run_all_experiments.py exp_actmaps.py ./save/ShallowCNN/models/CE_runs
 
-Usage examples:
-  # from repo root (uses ./save), checkpoint mode (default)
-  python run_all_experiments.py exp_actmaps.py
-
-  # explicitly choose mode and repo root
-  python run_all_experiments.py exp_generateRDM.py --mode modeldir --repo-root /path/to/repo
+The command above will execute:
+    python exp_actmaps.py <model_folder>
+for every immediate subdirectory inside the provided models root.  Extra
+arguments supplied after `--` are forwarded to each experiment invocation.
 """
 
-import sys
+from __future__ import annotations
+
 import argparse
 import subprocess
+import sys
 from pathlib import Path
 
-CKPT_PATTERNS = ("*.pth", "*.pt", "*.ckpt")
 
-
-def collect_checkpoints(repo_root: Path) -> list[Path]:
-    save_dir = repo_root / "save"
-    ckpts = sorted({
-        p.relative_to(repo_root)
-        for pat in CKPT_PATTERNS
-        for p in save_dir.rglob(pat)
-        if p.is_file()
-    })
-    return ckpts
-
-
-def collect_modeldirs(repo_root: Path) -> list[Path]:
-    """
-    Return immediate subdirectories under any '<repo_root>/save/**/models' directory.
-    Each returned path is relative to repo_root and represents a model folder.
-    """
-    save_root = repo_root / "save"
-    if not save_root.exists():
-        return []
-    modeldir_paths: set[Path] = set()
-    for models_root in save_root.rglob("models"):
-        if not models_root.is_dir():
-            continue
-        for child in models_root.iterdir():
-            if child.is_dir():
-                try:
-                    modeldir_paths.add(child.relative_to(repo_root))
-                except ValueError:
-                    # Fallback: store absolute if not under repo_root
-                    modeldir_paths.add(child.resolve())
-    return sorted(modeldir_paths)
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Run experiment over saved models")
-    parser.add_argument("experiment", help="Path to experiment script (e.g., exp_generateRDM.py)")
-    parser.add_argument("--mode", choices=["checkpoint", "modeldir"], default="checkpoint",
-                        help="Iteration mode: per-checkpoint or per model directory under save/models")
-    parser.add_argument("--repo-root", default=None,
-                        help="Path to repo root (defaults to current working directory)")
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Run an experiment for every model folder in a directory.",
+    )
+    parser.add_argument(
+        "experiment",
+        help="Path to the experiment script to execute (e.g. exp_generateRDM.py)",
+    )
+    parser.add_argument(
+        "models_root",
+        help="Directory whose immediate subfolders will be passed to the experiment.",
+    )
+    parser.add_argument(
+        "--python",
+        default=sys.executable,
+        help="Python executable to use for launching the experiment (default: current interpreter).",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the commands that would run without executing them.",
+    )
+    parser.add_argument(
+        "experiment_args",
+        nargs=argparse.REMAINDER,
+        help="Additional arguments to append to every experiment invocation. Use `--` to end the script arguments.",
+    )
     args = parser.parse_args()
 
-    repo_root = Path(args.repo_root).resolve() if args.repo_root else Path.cwd()
-    save_dir = repo_root / "save"
+    # Drop the explicit "--" separator if present in REMAINDER.
+    if args.experiment_args and args.experiment_args[0] == "--":
+        args.experiment_args = args.experiment_args[1:]
 
-    # Resolve experiment script path relative to repo_root (or accept absolute)
-    exp_script_path = Path(args.experiment)
-    if not exp_script_path.is_absolute():
-        exp_script_path = (repo_root / exp_script_path).resolve()
+    return args
 
-    if not exp_script_path.exists():
-        sys.exit(f"Can't find experiment script at: {exp_script_path}")
-    if not save_dir.exists():
-        sys.exit(f"Can't find 'save' directory under: {repo_root}")
 
-    # Collect items based on mode
-    if args.mode == "checkpoint":
-        items = collect_checkpoints(repo_root)
-        item_kind = "checkpoint"
-    else:
-        items = collect_modeldirs(repo_root)
-        item_kind = "model folder"
+def resolve_paths(experiment: str, models_root: str) -> tuple[Path, Path]:
+    exp_path = Path(experiment).expanduser().resolve()
+    models_root_path = Path(models_root).expanduser().resolve()
 
-    if not items:
-        where = (str(save_dir)) if args.mode == "checkpoint" else f"{save_dir}/**/models"
-        sys.exit(f"No {item_kind}s found under {where}")
+    if not exp_path.exists():
+        raise SystemExit(f"Experiment script not found: {exp_path}")
+    if not models_root_path.is_dir():
+        raise SystemExit(f"Models root is not a directory: {models_root_path}")
 
-    print(f"Found {len(items)} {item_kind}(s).")
+    return exp_path, models_root_path
 
-    # Make experiment path the way we'll pass it to Python (relative if possible)
-    try:
-        exp_for_cmd = str(exp_script_path.relative_to(repo_root))
-    except ValueError:
-        exp_for_cmd = str(exp_script_path)  # not under repo_root; use absolute
 
-    # Run sequentially from the repo root so relative paths resolve like manual usage
-    for i, rel_path in enumerate(items, 1):
-        arg_path = str(rel_path)
-        cmd = [sys.executable, exp_for_cmd, arg_path]
-        print(f"[{i}/{len(items)}] Running (cwd={repo_root}): {' '.join(cmd)}")
-        try:
-            subprocess.run(cmd, check=True, cwd=repo_root)
-        except subprocess.CalledProcessError as e:
-            print(f"    -> failed with return code {e.returncode}")
+def collect_model_folders(models_root: Path) -> list[Path]:
+    folders = [p for p in models_root.iterdir() if p.is_dir()]
+    if not folders:
+        raise SystemExit(f"No model folders found inside: {models_root}")
+    return sorted(folders)
+
+
+def run_experiment(
+    python_exe: str,
+    experiment: Path,
+    model_dir: Path,
+    extra_args: list[str] | None,
+    dry_run: bool,
+) -> int:
+    cmd = [python_exe, str(experiment), str(model_dir)]
+    if extra_args:
+        cmd.extend(extra_args)
+
+    print(f"Running: {' '.join(cmd)}")
+    if dry_run:
+        return 0
+
+    completed = subprocess.run(cmd, cwd=experiment.parent)
+    return completed.returncode
+
+
+def main() -> None:
+    args = parse_args()
+    exp_path, models_root = resolve_paths(args.experiment, args.models_root)
+    model_folders = collect_model_folders(models_root)
+
+    failures = 0
+    total = len(model_folders)
+    for idx, folder in enumerate(model_folders, 1):
+        print(f"[{idx}/{total}] {folder}")
+        rc = run_experiment(
+            python_exe=args.python,
+            experiment=exp_path,
+            model_dir=folder,
+            extra_args=args.experiment_args,
+            dry_run=args.dry_run,
+        )
+        if rc != 0:
+            print(f"    -> exit code {rc}")
+            failures += 1
+
+    if failures:
+        raise SystemExit(f"{failures} run(s) failed out of {total}.")
+
 
 if __name__ == "__main__":
     main()

@@ -1,14 +1,11 @@
 import torch
 import torchvision.transforms as T
-import matplotlib.pyplot as plt
-import math
 
 from utils.load import (
     parse_model_load_args,
-    load_encoders_from_model_folder,
+    load_model_bundles,
 )
 from utils.experiments import get_cifar10_eval_loader
-from utils.train import load_cifar10_metadata
 
 # Compute Moran's I for a 2D grid using rook adjacency
 def morans_I_2d(grid: torch.Tensor) -> torch.Tensor:
@@ -38,10 +35,9 @@ def main():
     args = parse_model_load_args()
 
     # Load all encoders from the provided model folder (one per trial),
-    # selecting the checkpoint indicated by --prefer (defaults to 'last' so we
-    # reuse the encoder paired with the trained readout head).
-    encoders_meta = load_encoders_from_model_folder(
-        model_folder=args.path,
+    # selecting the checkpoint combination indicated by --prefer (defaults to 'best').
+    bundles = load_model_bundles(
+        path=args.path,
         prefer=args.prefer,
         device=args.device,
         dp_if_multi_gpu=args.dp,
@@ -58,7 +54,8 @@ def main():
 
     # Compute Moran's I average for each encoder, then aggregate across trials
     trial_scores = []
-    for encoder, meta in encoders_meta:
+    for bundle in bundles:
+        encoder = bundle.encoder
         device = next(encoder.parameters()).device
         encoder.eval()
 

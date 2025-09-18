@@ -1,10 +1,11 @@
 import os
-import torch
+
 import matplotlib.pyplot as plt
+import torch
 
 from utils.load import (
     parse_model_load_args,
-    load_encoders_from_model_folder,
+    load_model_bundles,
 )
 from utils.experiments import get_cifar10_eval_loader
 
@@ -91,10 +92,9 @@ def main():
     args = parse_model_load_args()
 
     # Load all encoders from the provided model folder (one per trial),
-    # selecting the checkpoint indicated by --prefer (defaults to 'last' so we
-    # reuse the encoder paired with the trained readout head).
-    encoders_meta = load_encoders_from_model_folder(
-        model_folder=args.path,
+    # selecting the checkpoint combination indicated by --prefer (defaults to 'best').
+    bundles = load_model_bundles(
+        path=args.path,
         prefer=args.prefer,
         device=args.device,
         dp_if_multi_gpu=args.dp,
@@ -102,8 +102,12 @@ def main():
         strict=True,
     )
 
-    if len(encoders_meta) == 0:
-        raise RuntimeError("No encoders found in the provided model folder.")
+    if len(bundles) > 5:
+        print(f"Found {len(bundles)} runs; keeping the first 5 (trials 0-4).")
+        bundles = bundles[:5]
+
+    if len(bundles) == 0:
+        raise RuntimeError("No checkpoints found in the provided model folder.")
 
     # Eval-only CIFAR-10 loader (deterministic order)
     val_loader = get_cifar10_eval_loader(
@@ -118,16 +122,20 @@ def main():
     # For each encoder, compute embeddings on the fixed 1000 samples and then the RDM
     rdms = []
     metas = []
-    for encoder, meta in encoders_meta:
+    for bundle in bundles:
+        encoder = bundle.encoder
+        meta = bundle.meta
         device = next(encoder.parameters()).device
         feats = _compute_embeddings(encoder, samples_cpu, device, args.batch_size)
         rdm = _pearson_rdm(feats)
         rdms.append(rdm)
         # Keep compact meta info for traceability
         metas.append({
-            "epoch": meta.get("epoch"),
             "stage": meta.get("stage"),
+            "encoder_epoch": meta.get("encoder_epoch"),
             "ckpt_path": meta.get("ckpt_path"),
+            "classifier_ckpt": meta.get("classifier_ckpt"),
+            "run_folder": meta.get("run_folder"),
         })
 
     # Save all trial RDMs in a single file under the given model folder

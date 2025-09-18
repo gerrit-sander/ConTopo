@@ -1,12 +1,60 @@
 import argparse
 import os
+from dataclasses import dataclass
+from typing import Optional
+
 import torch
 
 from utils.train import unwrap
-
-from networks.shallowCNN import LinearShallowCNN, ProjectionShallowCNN
+from networks.shallowCNN import LinearShallowCNN, ProjectionShallowCNN, LinearClassifier
 from networks.modified_ResNet18 import LinearResNet18, ProjectionResNet18
 
+
+@dataclass
+class LoadedModelBundle:
+    encoder: torch.nn.Module
+    classifier: Optional[torch.nn.Module]
+    meta: dict
+
+
+_E2E_CKPT_ORDER = {
+    "best": ("e2e_best.pth", "e2e_last.pth"),
+    "last": ("e2e_last.pth", "e2e_best.pth"),
+}
+_CONTRASTIVE_ENCODER_ORDER = ("contrastive_last.pth", "contrastive_best.pth")
+_READOUT_ORDER = ("readout_best.pth", "readout_last.pth")
+
+
+def _normalize_device(device: str | torch.device | None) -> torch.device:
+    if device is None:
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if isinstance(device, str):
+        return torch.device(device)
+    return device
+
+
+def _first_existing(run_folder: str, names: tuple[str, ...]) -> str | None:
+    for name in names:
+        path = os.path.join(run_folder, name)
+        if os.path.isfile(path):
+            return path
+    return None
+
+
+def _prepare_module(
+    module: torch.nn.Module | None,
+    device: torch.device,
+    dp_if_multi_gpu: bool,
+    eval_mode: bool,
+) -> torch.nn.Module | None:
+    if module is None:
+        return None
+    module = module.to(device)
+    if dp_if_multi_gpu and torch.cuda.device_count() > 1:
+        module = torch.nn.DataParallel(module)
+    if eval_mode:
+        module.eval()
+    return module
 
 def _maybe_fix_state_dict_keys(state_dict: dict, model: torch.nn.Module) -> dict:
     """Normalize DataParallel prefixes: add/remove 'module.' to match `model`."""
@@ -66,6 +114,165 @@ def _build_head_from_args(args: dict, stage: str, device: torch.device, dp_if_mu
             model = torch.nn.DataParallel(model)
 
     return model
+
+
+def _load_e2e_bundle(
+    run_folder: str,
+    device: torch.device,
+    prefer: str,
+    dp_if_multi_gpu: bool,
+    eval_mode: bool,
+    strict: bool,
+) -> LoadedModelBundle | None:
+    order = _E2E_CKPT_ORDER.get(prefer, _E2E_CKPT_ORDER["best"])
+    ckpt_path = _first_existing(run_folder, order)
+    if ckpt_path is None:
+        return None
+
+    ckpt = torch.load(ckpt_path, map_location=device)
+    args = ckpt.get("args", {})
+    model = _build_head_from_args(args, "e2e", device, dp_if_multi_gpu)
+
+    state_dict = ckpt.get("state_dict")
+    if state_dict is None:
+        raise KeyError(f"Checkpoint missing 'state_dict': {ckpt_path}")
+
+    state_dict = _maybe_fix_state_dict_keys(state_dict, model)
+    model.load_state_dict(state_dict, strict=strict)
+
+    base = unwrap(model)
+    encoder_module = base.encoder
+    classifier_module = getattr(base, "fc", None)
+
+    encoder = _prepare_module(encoder_module, device, dp_if_multi_gpu, eval_mode)
+    classifier = _prepare_module(classifier_module, device, dp_if_multi_gpu, eval_mode)
+
+    meta = {
+        "stage": "e2e",
+        "run_folder": run_folder,
+        "encoder_ckpt": ckpt_path,
+        "classifier_ckpt": ckpt_path,
+        "encoder_epoch": ckpt.get("epoch"),
+        "classifier_epoch": ckpt.get("epoch"),
+        "args": args,
+        "metrics": ckpt.get("metrics"),
+        "ckpt_path": ckpt_path,
+        "figure_source": ckpt_path,
+    }
+    return LoadedModelBundle(encoder=encoder, classifier=classifier, meta=meta)
+
+
+def _load_contrastive_bundle(
+    run_folder: str,
+    device: torch.device,
+    prefer: str,
+    dp_if_multi_gpu: bool,
+    eval_mode: bool,
+    strict: bool,
+) -> LoadedModelBundle | None:
+    ckpt_path = _first_existing(run_folder, _CONTRASTIVE_ENCODER_ORDER)
+    if ckpt_path is None:
+        return None
+
+    ckpt = torch.load(ckpt_path, map_location=device)
+    args = ckpt.get("args", {})
+    model = _build_head_from_args(args, "contrastive", device, dp_if_multi_gpu)
+
+    state_dict = ckpt.get("state_dict")
+    if state_dict is None:
+        raise KeyError(f"Checkpoint missing 'state_dict': {ckpt_path}")
+
+    state_dict = _maybe_fix_state_dict_keys(state_dict, model)
+    model.load_state_dict(state_dict, strict=strict)
+
+    base = unwrap(model)
+    encoder_module = base.encoder
+    encoder = _prepare_module(encoder_module, device, dp_if_multi_gpu, eval_mode)
+
+    if prefer == "last":
+        readout_order = ("readout_last.pth", "readout_best.pth")
+    else:
+        readout_order = _READOUT_ORDER
+    readout_path = _first_existing(run_folder, readout_order)
+    if readout_path is None:
+        raise FileNotFoundError(
+            f"No linear readout checkpoint found in {run_folder}. "
+            "Expected one of: readout_best.pth, readout_last.pth"
+        )
+
+    readout_ckpt = torch.load(readout_path, map_location=device)
+    linear_state = readout_ckpt.get("linear_state_dict")
+    if linear_state is None:
+        raise KeyError(f"Checkpoint missing 'linear_state_dict': {readout_path}")
+
+    readout_args = readout_ckpt.get("args", {})
+    emb_dim = int(readout_args.get("embedding_dim", args.get("embedding_dim", 256)))
+    num_classes = int(readout_args.get("num_classes", args.get("num_classes", 10)))
+
+    classifier_module = LinearClassifier(emb_dim=emb_dim, num_classes=num_classes)
+    classifier_module = _prepare_module(classifier_module, device, dp_if_multi_gpu, eval_mode)
+
+    linear_state = _maybe_fix_state_dict_keys(linear_state, classifier_module)
+    classifier_module.load_state_dict(linear_state, strict=strict)
+
+    meta = {
+        "stage": "contrastive",
+        "run_folder": run_folder,
+        "encoder_ckpt": ckpt_path,
+        "classifier_ckpt": readout_path,
+        "encoder_epoch": ckpt.get("epoch"),
+        "classifier_epoch": readout_ckpt.get("epoch"),
+        "args": args,
+        "readout_args": readout_args,
+        "metrics": ckpt.get("metrics"),
+        "readout_metrics": {
+            "val_acc": readout_ckpt.get("val_acc"),
+            "val_loss": readout_ckpt.get("val_loss"),
+        },
+        "ckpt_path": ckpt_path,
+        "figure_source": ckpt_path,
+    }
+    return LoadedModelBundle(encoder=encoder, classifier=classifier_module, meta=meta)
+
+
+def load_model_bundles(
+    path: str,
+    prefer: str = "best",
+    device: str | torch.device | None = None,
+    dp_if_multi_gpu: bool = False,
+    eval_mode: bool = True,
+    strict: bool = True,
+) -> list[LoadedModelBundle]:
+    if prefer not in _E2E_CKPT_ORDER:
+        raise ValueError("'prefer' must be 'best' or 'last'")
+
+    device_t = _normalize_device(device)
+    path_abs = os.path.abspath(path)
+
+    if os.path.isdir(path_abs):
+        if _dir_contains_expected_ckpts(path_abs):
+            run_folders = [path_abs]
+        else:
+            run_folders = list_run_folders_from_model_folder(path_abs)
+    elif os.path.isfile(path_abs):
+        run_folders = [os.path.dirname(path_abs)]
+    else:
+        raise FileNotFoundError(f"Path not found: {path}")
+
+    bundles: list[LoadedModelBundle] = []
+    for run in run_folders:
+        bundle = _load_e2e_bundle(run, device_t, prefer, dp_if_multi_gpu, eval_mode, strict)
+        if bundle is None:
+            bundle = _load_contrastive_bundle(run, device_t, prefer, dp_if_multi_gpu, eval_mode, strict)
+        if bundle is None:
+            raise FileNotFoundError(
+                f"No supported checkpoints found in {run}. "
+                "Expected e2e_best/e2e_last or contrastive_*/readout_* pairs."
+            )
+        bundle.meta.setdefault("prefer", prefer)
+        bundles.append(bundle)
+
+    return bundles
 
 def load_encoder_from_ckpt(
     ckpt_path: str,
@@ -243,19 +450,15 @@ def load_encoders_from_model_folder(
 
     Returns a list of (encoder, meta) for each discovered run folder.
     """
-    run_folders = list_run_folders_from_model_folder(model_folder)
-    out = []
-    for run in run_folders:
-        enc, meta = load_encoder_from_run_folder(
-            run_folder=run,
-            prefer=prefer,
-            device=device,
-            dp_if_multi_gpu=dp_if_multi_gpu,
-            eval_mode=eval_mode,
-            strict=strict,
-        )
-        out.append((enc, meta))
-    return out
+    bundles = load_model_bundles(
+        path=model_folder,
+        prefer=prefer,
+        device=device,
+        dp_if_multi_gpu=dp_if_multi_gpu,
+        eval_mode=eval_mode,
+        strict=strict,
+    )
+    return [(bundle.encoder, bundle.meta) for bundle in bundles]
 
 def parse_model_load_args():
     parser = argparse.ArgumentParser(
@@ -271,10 +474,10 @@ def parse_model_load_args():
     parser.add_argument(
         "--prefer",
         choices=["best", "last"],
-        default="last",
+        default="best",
         help=(
-            "When 'path' is a run folder, choose which checkpoint to load. "
-            "Default: 'last' so experiments reuse the encoder frozen for linear readout."
+            "When 'path' resolves to a run folder, choose which checkpoint combination to load. "
+            "Default: 'best' selects validation-best CE checkpoints or the contrastive_last/readout_best pair for contrastive runs."
         ),
     )
     parser.add_argument(
