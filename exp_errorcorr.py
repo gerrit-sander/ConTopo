@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import torch
 
 from utils.load import parse_model_load_args, load_model_bundles
@@ -21,12 +22,13 @@ def _collect_errors_and_preds(
     classifier: torch.nn.Module,
     loader: torch.utils.data.DataLoader,
     device: torch.device,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     total = len(loader.dataset)
     errors = torch.zeros(total, dtype=torch.float32)
     preds = torch.empty(total, dtype=torch.long)
     targets = torch.empty(total, dtype=torch.long)
     offset = 0
+    logits_store: torch.Tensor | None = None
 
     encoder.eval()
     classifier.eval()
@@ -51,9 +53,16 @@ def _collect_errors_and_preds(
             errors[offset : offset + size] = batch_errors
             preds[offset : offset + size] = batch_preds.cpu()
             targets[offset : offset + size] = labels.cpu()
+            logits_cpu = logits.detach().cpu()
+            if logits_store is None:
+                logits_store = torch.empty(total, logits_cpu.size(1), dtype=logits_cpu.dtype)
+            logits_store[offset : offset + size] = logits_cpu
             offset += size
 
-    return errors, preds, targets
+    if logits_store is None:
+        logits_store = torch.empty(total, 0)
+
+    return errors, preds, targets, logits_store
 
 
 def _pearson_corrcoef(error_matrix: torch.Tensor) -> torch.Tensor:
@@ -70,6 +79,55 @@ def _pearson_corrcoef(error_matrix: torch.Tensor) -> torch.Tensor:
     idx = torch.arange(corr.size(0))
     corr[idx, idx] = 1.0
     return corr
+
+
+def ensemble_accuracy(
+    logits_list: list[torch.Tensor],
+    labels: torch.Tensor,
+    method: str = "soft",
+) -> float:
+    """Replicate professor's ensemble routines using numpy for parity."""
+
+    if not logits_list:
+        raise ValueError("logits_list must contain at least one model output")
+
+    logits_np = [logits.detach().cpu().numpy() for logits in logits_list]
+    labels_np = labels.detach().cpu().numpy()
+
+    num_samples, num_classes = logits_np[0].shape
+    for logits in logits_np:
+        if logits.shape != (num_samples, num_classes):
+            raise ValueError("All logits must share the same shape")
+
+    probs = [np.exp(l) / np.exp(l).sum(axis=1, keepdims=True) for l in logits_np]
+
+    if method == "hard":
+        preds = np.array([np.argmax(l, axis=1) for l in logits_np])
+        final_preds = np.apply_along_axis(
+            lambda x: np.bincount(x, minlength=num_classes).argmax(), axis=0, arr=preds
+        )
+    elif method == "soft":
+        avg_probs = np.mean(probs, axis=0)
+        final_preds = np.argmax(avg_probs, axis=1)
+    elif method == "max_confidence":
+        probs_stack = np.stack(probs, axis=0)
+        max_conf = probs_stack.max(axis=2)
+        best_model = np.argmax(max_conf, axis=0)
+        final_preds = np.array(
+            [np.argmax(probs_stack[best_model[i], i]) for i in range(num_samples)]
+        )
+    elif method == "conf_weighted":
+        probs_stack = np.stack(probs, axis=0)
+        confs = probs_stack.max(axis=2)
+        weights = confs / confs.sum(axis=0, keepdims=True)
+        weighted_probs = np.einsum("mn,mnc->nc", weights, probs_stack)
+        final_preds = np.argmax(weighted_probs, axis=1)
+    else:
+        raise ValueError(
+            "Unknown method. Choose from ['hard', 'soft', 'max_confidence', 'conf_weighted']."
+        )
+
+    return float(np.mean(final_preds == labels_np))
 
 
 def _run_name(meta: dict) -> str:
@@ -103,6 +161,7 @@ def main() -> None:
 
     errors_all: list[torch.Tensor] = []
     preds_all: list[torch.Tensor] = []
+    logits_all: list[torch.Tensor] = []
     labels_ref: torch.Tensor | None = None
     counts: list[int] = []
     accuracies: list[float] = []
@@ -116,7 +175,7 @@ def main() -> None:
             continue
 
         device = next(encoder.parameters()).device
-        errors, preds, labels = _collect_errors_and_preds(encoder, classifier, loader, device)
+        errors, preds, labels, logits = _collect_errors_and_preds(encoder, classifier, loader, device)
 
         if labels_ref is None:
             labels_ref = labels
@@ -125,6 +184,7 @@ def main() -> None:
 
         errors_all.append(errors)
         preds_all.append(preds)
+        logits_all.append(logits)
         counts.append(int(errors.sum().item()))
         accuracies.append(float((preds == labels).float().mean().item()))
         run_names.append(_run_name(bundle.meta))
@@ -140,6 +200,15 @@ def main() -> None:
     print("Individual accuracies:")
     for name, acc in zip(run_names, accuracies):
         print(f"{name}: {acc:.4f}")
+
+    non_ensemble_mean = float(np.mean(accuracies)) if accuracies else float("nan")
+    non_ensemble_std = (
+        float(np.std(accuracies, ddof=1)) if len(accuracies) > 1 else 0.0
+    ) if accuracies else float("nan")
+    if accuracies:
+        print(
+            f"Non-ensemble mean +/- std: {non_ensemble_mean:.4f} +/- {non_ensemble_std:.4f}"
+        )
 
     error_matrix = torch.stack(errors_all)
     corr = _pearson_corrcoef(error_matrix)
@@ -162,11 +231,58 @@ def main() -> None:
         print("Pairwise mean: nan")
         print("Pairwise std: nan")
 
-    if labels_ref is not None and preds_all:
-        pred_matrix = torch.stack(preds_all)
-        votes = torch.mode(pred_matrix, dim=0).values
-        ensemble_acc = float((votes == labels_ref).float().mean().item())
-        print(f"Ensemble accuracy: {ensemble_acc}")
+    ensemble_results: dict[str, float] = {}
+    if labels_ref is not None and logits_all:
+        for method in ("soft", "hard", "max_confidence", "conf_weighted"):
+            acc = ensemble_accuracy(logits_all, labels_ref, method=method)
+            ensemble_results[method] = acc
+            print(f"Ensemble accuracy ({method}): {acc:.4f}")
+
+    if accuracies or ensemble_results:
+        headers = [
+            "Non-ensemble",
+            "Soft Vote",
+            "Hard Vote",
+            "Max Conf",
+            "Conf Weighted",
+        ]
+        row_values = [
+            (
+                f"{non_ensemble_mean:.4f} +/- {non_ensemble_std:.4f}"
+                if accuracies
+                else "nan"
+            ),
+            (
+                f"{ensemble_results.get('soft', float('nan')):.4f}"
+                if 'soft' in ensemble_results
+                else "nan"
+            ),
+            (
+                f"{ensemble_results.get('hard', float('nan')):.4f}"
+                if 'hard' in ensemble_results
+                else "nan"
+            ),
+            (
+                f"{ensemble_results.get('max_confidence', float('nan')):.4f}"
+                if 'max_confidence' in ensemble_results
+                else "nan"
+            ),
+            (
+                f"{ensemble_results.get('conf_weighted', float('nan')):.4f}"
+                if 'conf_weighted' in ensemble_results
+                else "nan"
+            ),
+        ]
+
+        widths = [max(len(h), len(v)) for h, v in zip(headers, row_values)]
+        header_line = " | ".join(h.ljust(w) for h, w in zip(headers, widths))
+        sep_line = "-+-".join("-" * w for w in widths)
+        value_line = " | ".join(v.ljust(w) for v, w in zip(row_values, widths))
+
+        print("\nAccuracy summary:")
+        print(header_line)
+        print(sep_line)
+        print(value_line)
 
 
 if __name__ == "__main__":
