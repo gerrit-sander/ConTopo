@@ -2,6 +2,7 @@ import os
 
 import matplotlib.pyplot as plt
 import torch
+import torch.nn.functional as F
 
 from utils.load import (
     parse_model_load_args,
@@ -118,24 +119,47 @@ def main():
 
     # Deterministically select 100 samples per class (1000 total)
     samples_cpu, labels = _select_deterministic_cifar10_subset(val_loader, per_class=100)
+    labels_tensor = torch.tensor(labels, dtype=torch.long)
 
     # For each encoder, compute embeddings on the fixed 1000 samples and then the RDM
     rdms = []
     metas = []
-    for bundle in bundles:
+    cosine_results = []
+    for idx, bundle in enumerate(bundles):
         encoder = bundle.encoder
         meta = bundle.meta
         device = next(encoder.parameters()).device
         feats = _compute_embeddings(encoder, samples_cpu, device, args.batch_size)
         rdm = _pearson_rdm(feats)
         rdms.append(rdm)
+        try:
+            run_folder = os.path.dirname(meta.get("ckpt_path", ""))
+            run_name = os.path.basename(run_folder) if run_folder else f"trial_{idx:02d}"
+        except Exception:
+            run_name = f"trial_{idx:02d}"
         # Keep compact meta info for traceability
-        metas.append({
+        meta_info = {
             "stage": meta.get("stage"),
             "encoder_epoch": meta.get("encoder_epoch"),
             "ckpt_path": meta.get("ckpt_path"),
             "classifier_ckpt": meta.get("classifier_ckpt"),
             "run_folder": meta.get("run_folder"),
+            "run_name": run_name,
+        }
+        metas.append(meta_info)
+
+        norm_feats = F.normalize(feats, p=2, dim=1)
+        sim_matrix = norm_feats @ norm_feats.t()
+        tri_i, tri_j = torch.triu_indices(sim_matrix.size(0), sim_matrix.size(1), offset=1)
+        pair_sims = sim_matrix[tri_i, tri_j].to(dtype=torch.float32)
+        same_mask = labels_tensor[tri_i] == labels_tensor[tri_j]
+        within_sims = pair_sims[same_mask].cpu()
+        across_sims = pair_sims[~same_mask].cpu()
+        cosine_results.append({
+            "run_name": run_name,
+            "within": within_sims,
+            "across": across_sims,
+            "meta": meta_info,
         })
 
     # Save all trial RDMs in a single file under the given model folder
@@ -149,12 +173,7 @@ def main():
 
     # Save per-trial figures (full RDMs for visualization)
     for idx, (rdm, meta) in enumerate(zip(rdms, metas)):
-        try:
-            run_folder = os.path.dirname(meta.get("ckpt_path", ""))
-            run_name = os.path.basename(run_folder) if run_folder else f"trial_{idx:02d}"
-        except Exception:
-            run_name = f"trial_{idx:02d}"
-
+        run_name = meta.get("run_name") or f"trial_{idx:02d}"
         fig_name = f"RDM_{base}__{run_name}.png"
         fig_path = os.path.join(model_folder, fig_name)
 
@@ -168,6 +187,35 @@ def main():
         plt.savefig(fig_path, dpi=200, bbox_inches="tight")
         plt.close()
         print(f"Saved RDM figure: {fig_path}")
+
+    for stats in cosine_results:
+        run_name = stats["run_name"]
+        cos_pt_name = f"CosineSims_{base}__{run_name}.pt"
+        cos_pt_path = os.path.join(model_folder, cos_pt_name)
+        torch.save({
+            "within": stats["within"],
+            "across": stats["across"],
+            "run_name": run_name,
+            "meta": stats["meta"],
+            "labels": labels,
+        }, cos_pt_path)
+        bins = 50
+        plt.figure(figsize=(6, 4))
+        ax = plt.gca()
+        ax.hist(stats["across"].numpy(), bins=bins, color="#d95f02", alpha=0.65, density=True, label="Across class")
+        ax.hist(stats["within"].numpy(), bins=bins, color="#1b9e77", alpha=0.65, density=True, label="Within class")
+        ax.set_title(f"Cosine similarity: {run_name}")
+        ax.set_xlabel("Cosine similarity")
+        ax.set_ylabel("Density")
+        ax.legend(frameon=False)
+        ax.grid(False)
+        plt.tight_layout()
+        cos_fig_name = f"CosineSims_{base}__{run_name}.png"
+        cos_fig_path = os.path.join(model_folder, cos_fig_name)
+        plt.savefig(cos_fig_path, dpi=200, bbox_inches="tight")
+        plt.close()
+        print(f"Saved cosine similarity data: {cos_pt_path}")
+        print(f"Saved cosine similarity figure: {cos_fig_path}")
 
     # Save averaged RDM figure if available
     if avg_rdm is not None:
@@ -243,6 +291,14 @@ def main():
         "metas": metas,             # minimal metadata per trial
         "model_folder": model_folder,
         "prefer": args.prefer,
+        "cosine_similarities": [
+            {
+                "run_name": stats["run_name"],
+                "within": stats["within"],
+                "across": stats["across"],
+            }
+            for stats in cosine_results
+        ],
     }
     torch.save(payload, out_path)
     print(f"Saved {len(rdms_upper)} upper-triangular RDMs to: {out_path}")
