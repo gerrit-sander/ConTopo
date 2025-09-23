@@ -199,11 +199,13 @@ def main():
             "meta": stats["meta"],
             "labels": labels,
         }, cos_pt_path)
-        bins = 50
+        within_np = stats["within"].numpy()
+        across_np = stats["across"].numpy()
+        edges = torch.linspace(-1.0, 1.0, steps=60).numpy()
         plt.figure(figsize=(6, 4))
         ax = plt.gca()
-        ax.hist(stats["across"].numpy(), bins=bins, color="#d95f02", alpha=0.65, density=True, label="Across class")
-        ax.hist(stats["within"].numpy(), bins=bins, color="#1b9e77", alpha=0.65, density=True, label="Within class")
+        ax.hist(across_np, bins=edges, color="#d95f02", alpha=0.65, density=True, label="Across class")
+        ax.hist(within_np, bins=edges, color="#1b9e77", alpha=0.65, density=True, label="Within class")
         ax.set_title(f"Cosine similarity: {run_name}")
         ax.set_xlabel("Cosine similarity")
         ax.set_ylabel("Density")
