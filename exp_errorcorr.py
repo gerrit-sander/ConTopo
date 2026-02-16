@@ -24,7 +24,7 @@ def _collect_errors_and_preds(
     loader: torch.utils.data.DataLoader,
     device: torch.device,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    # Allocate per-sample buffers up front so batches can write into them without concatenation.
+    # Allocate per-sample buffers up front to avoid batch-wise concatenation.
     total = len(loader.dataset)
     errors = torch.zeros(total, dtype=torch.float32)
     preds = torch.empty(total, dtype=torch.long)
@@ -37,7 +37,7 @@ def _collect_errors_and_preds(
 
     with torch.no_grad():
         for batch in loader:
-            # Some collates add extra metadata; slice to the canonical (images, labels).
+            # Some collates add extra metadata; keep only (images, labels).
             images, labels = batch[:2] if isinstance(batch, (list, tuple)) else batch
             images = images.to(device, non_blocking=True)
             labels = labels.to(device, non_blocking=True)
@@ -58,7 +58,7 @@ def _collect_errors_and_preds(
             targets[offset : offset + size] = labels.cpu()
             logits_cpu = logits.detach().cpu()
             if logits_store is None:
-                # Lazily size the logits tensor once we know how many classes the head emits.
+                # Size logits tensor once class count is known.
                 logits_store = torch.empty(total, logits_cpu.size(1), dtype=logits_cpu.dtype)
             logits_store[offset : offset + size] = logits_cpu
             offset += size
@@ -70,7 +70,7 @@ def _collect_errors_and_preds(
 
 
 def _pearson_corrcoef(error_matrix: torch.Tensor) -> torch.Tensor:
-    # Rows correspond to trials; compute their pairwise Pearson correlations over samples.
+    # Rows are trials; compute pairwise Pearson correlations over samples.
     if error_matrix.size(0) == 0:
         return torch.empty(0, 0)
     centered = error_matrix - error_matrix.mean(dim=1, keepdim=True)
@@ -91,7 +91,7 @@ def ensemble_accuracy(
     labels: torch.Tensor,
     method: str = "soft",
 ) -> float:
-    """Replicate professor's ensemble routines using numpy for parity."""
+    """Evaluate ensemble prediction variants with NumPy implementations."""
 
     if not logits_list:
         raise ValueError("logits_list must contain at least one model output")
@@ -169,7 +169,7 @@ def _apply_pink_noise(images: torch.Tensor, noise_level: float) -> torch.Tensor:
     noisy = torch.empty_like(images)
 
     for idx in range(batch_size):
-        # Build 1/f noise in the Fourier domain for every channel independently.
+        # Build 1/f noise in the Fourier domain for each channel independently.
         channel_noises = []
         for _ in range(channels):
             white = np.random.normal(0.0, 1.0, (height, width))
@@ -201,7 +201,7 @@ def _apply_salt_pepper_noise(images: torch.Tensor, noise_level: float) -> torch.
 
     device = noisy.device
     for idx in range(batch_size):
-        # Corrupt random pixels per image, toggling them to black or white with equal probability.
+        # Corrupt random pixels to black or white with equal probability.
         coords = torch.randint(0, num_pixels, (num_corrupt,), device=device)
         rows = coords // width
         cols = coords % width
@@ -249,7 +249,7 @@ def _load_clean_test_images(
         images_list.append(images)
         labels_list.append(labels)
 
-    # Materialize the entire test split so downstream noise sampling can operate in-memory.
+    # Materialize the full test split for in-memory noise sampling.
     images = torch.cat(images_list, dim=0)
     labels = torch.cat(labels_list, dim=0)
     return images, labels
@@ -276,7 +276,7 @@ def _build_noisy_loader(
         raise ValueError(f"Unsupported noise type: {noise_type}")
 
     normalized = _normalize_images(noisy)
-    # Pair the perturbed images with the original labels for evaluation.
+    # Pair perturbed images with original labels.
     dataset = torch.utils.data.TensorDataset(normalized, base_labels)
     loader = torch.utils.data.DataLoader(
         dataset,
@@ -292,7 +292,7 @@ def _evaluate_bundles(
     bundles,
     loader: torch.utils.data.DataLoader,
 ) -> dict | None:
-    # Accumulate per-trial results so we can compute correlations and ensembles later.
+    # Accumulate per-trial results for correlation and ensemble metrics.
     errors_all: list[torch.Tensor] = []
     preds_all: list[torch.Tensor] = []
     counts: list[int] = []
@@ -319,7 +319,7 @@ def _evaluate_bundles(
         errors_all.append(errors)
         preds_all.append(preds)
         logits_all.append(logits)
-        # Track absolute error counts for quick diagnostics.
+        # Track absolute error counts for diagnostics.
         counts.append(int(errors.sum().item()))
         accuracies.append(float((preds == labels).float().mean().item()))
         run_names.append(_run_name(bundle.meta))
@@ -327,7 +327,7 @@ def _evaluate_bundles(
     if not errors_all:
         return None
 
-    # Stack errors into a matrix with shape (num_trials, num_samples).
+    # Stack errors as [num_trials, num_samples].
     error_matrix = torch.stack(errors_all)
 
     non_ensemble_mean = float(np.mean(accuracies)) if accuracies else float("nan")
@@ -340,7 +340,7 @@ def _evaluate_bundles(
 
     ensemble_results: dict[str, float] = {}
     if labels_ref is not None and logits_all:
-        # Evaluate each ensemble voting scheme against the shared label order.
+        # Evaluate each ensemble voting scheme on shared label order.
         for method in ("soft", "hard", "max_confidence", "conf_weighted"):
             ensemble_results[method] = ensemble_accuracy(logits_all, labels_ref, method=method)
 
@@ -356,7 +356,7 @@ def _evaluate_bundles(
 
 
 def _print_diagnostics(result: dict, label: str) -> None:
-    # Emit rich per-condition statistics before the summary table is produced.
+    # Emit detailed per-condition statistics before the summary table.
     print(f"Diagnostics ({label}):")
 
     print("Error counts per trial:")
@@ -431,7 +431,7 @@ def main() -> None:
     noise_levels = [0.0, 0.01, 0.05, 0.1, 0.15, 0.2]
     noise_types = ["white", "pink", "salt_pepper"]
 
-    # Enumerate the clean run and every noise/level combination we intend to probe.
+    # Enumerate clean and noisy conditions.
     conditions: list[tuple[str, str | None, float]] = [("clean 0.00", None, 0.0)]
     for level in noise_levels[1:]:
         for noise_type in noise_types:
@@ -457,7 +457,7 @@ def main() -> None:
             continue
 
         if idx == 0:
-            # Show detailed metrics for the clean condition before the aggregate table.
+            # Show detailed metrics for the clean condition.
             _print_diagnostics(result, label)
 
         summary_rows.append(
@@ -514,7 +514,7 @@ def main() -> None:
 
     widths = [len(header) for header in headers]
     for row in table_rows:
-        # Expand column widths to fit the widest string seen per column.
+        # Expand column widths to fit the widest string in each column.
         widths = [max(w, len(cell)) for w, cell in zip(widths, row)]
 
     header_line = " | ".join(h.ljust(w) for h, w in zip(headers, widths))

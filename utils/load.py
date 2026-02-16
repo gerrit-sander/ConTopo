@@ -73,8 +73,8 @@ def _infer_stage(ckpt: dict, ckpt_path: str) -> str:
 
     Priority:
     1) Use ckpt['stage'] if present.
-    2) Else infer from filename.
-    3) Else infer from args (presence of 'projection_dim' → contrastive).
+    2) Infer from filename.
+    3) Infer from args (`projection_dim` implies contrastive).
     """
     stage = ckpt.get("stage")
     if stage in {"e2e", "contrastive"}:
@@ -89,8 +89,7 @@ def _infer_stage(ckpt: dict, ckpt_path: str) -> str:
 
 def _build_head_from_args(args: dict, stage: str, device: torch.device, dp_if_multi_gpu: bool):
     """
-    Recreate the SAME head used at train time (Linear* for CE, Projection* for contrastive),
-    so weights load cleanly and we can then extract `.encoder`.
+    Recreate the train-time head so weights load cleanly before extracting `.encoder`.
     """
     model_type = args.get("model_type", "shallowcnn")
     emb_dim = int(args.get("embedding_dim", 256))
@@ -101,7 +100,7 @@ def _build_head_from_args(args: dict, stage: str, device: torch.device, dp_if_mu
             model = ProjectionResNet18(emb_dim=emb_dim, feat_dim=proj_dim, ret_emb=True)
         else:
             model = ProjectionShallowCNN(emb_dim=emb_dim, feat_dim=proj_dim, ret_emb=True, use_dropout=False)
-    else:  # 'e2e' CE
+    else:  # CE end-to-end.
         num_classes = int(args.get("num_classes", 10))
         if model_type == "resnet18":
             model = LinearResNet18(emb_dim=emb_dim, num_classes=num_classes, ret_emb=True)
@@ -307,7 +306,7 @@ def load_encoder_from_ckpt(
     ckpt = torch.load(ckpt_path, map_location=device)
     stage = _infer_stage(ckpt, ckpt_path)
 
-    # Reject linear-readout-only checkpoints (no encoder weights inside)
+    # Reject linear-readout-only checkpoints (no encoder weights).
     if stage == "linear_readout" or ("linear_state_dict" in ckpt and "state_dict" not in ckpt):
         raise ValueError(
             "This checkpoint contains only the linear readout head (no encoder). "
@@ -321,11 +320,11 @@ def load_encoder_from_ckpt(
     if state_dict is None:
         raise KeyError("Checkpoint does not contain 'state_dict' with encoder+head weights.")
 
-    # Align DP prefixes and load weights
+    # Align DataParallel prefixes and load weights.
     state_dict = _maybe_fix_state_dict_keys(state_dict, head)
     head.load_state_dict(state_dict, strict=strict)
 
-    # Extract ONLY the encoder (unwrap in case of DataParallel)
+    # Extract only the encoder (unwrap DataParallel if needed).
     encoder = unwrap(head).encoder
 
     if torch.cuda.is_available():
@@ -421,10 +420,10 @@ def list_run_folders_from_model_folder(model_folder: str) -> list[str]:
     - Flat trial folder: <model_folder> itself contains *.pth
     """
     model_folder = os.path.abspath(model_folder)
-    # If the model folder itself contains expected checkpoint files, treat it as a run folder.
+    # If model folder already contains checkpoints, treat it as a run folder.
     if _dir_contains_expected_ckpts(model_folder):
         return [model_folder]
-    # Otherwise, look for immediate child dirs that contain checkpoints
+    # Otherwise, look for immediate child directories with checkpoints.
     runs: list[str] = []
     for name in sorted(os.listdir(model_folder)):
         d = os.path.join(model_folder, name)

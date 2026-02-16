@@ -13,11 +13,9 @@ from utils.experiments import get_cifar10_eval_loader
 
 def _select_deterministic_cifar10_subset(val_loader, per_class: int = 100):
     """
-    Deterministically collect exactly `per_class` samples for each of the 10 CIFAR-10 classes
-    from the evaluation loader (which is ordered and not shuffled).
+    Collect exactly `per_class` samples per CIFAR-10 class from the eval loader.
 
-    Returns images stacked in CLASS-GROUPED order ([1000, C, H, W]) and labels where the
-    first 100 belong to class 0, next 100 to class 1, ..., last 100 to class 9.
+    Returns class-grouped images ([1000, C, H, W]) and matching labels.
     """
     imgs_by_class = {i: [] for i in range(10)}
 
@@ -28,11 +26,11 @@ def _select_deterministic_cifar10_subset(val_loader, per_class: int = 100):
                 lst = imgs_by_class[c]
                 if len(lst) < per_class:
                     lst.append(img)
-            # Early exit if all classes are filled
+            # Stop once all class buckets are full.
             if all(len(lst) >= per_class for lst in imgs_by_class.values()):
                 break
 
-    # Verify and stack in class order 0..9
+    # Verify and stack in class order 0..9.
     for c in range(10):
         if len(imgs_by_class[c]) < per_class:
             raise RuntimeError(f"Could not collect required samples for class {c}: "
@@ -50,7 +48,7 @@ def _select_deterministic_cifar10_subset(val_loader, per_class: int = 100):
 
 def _compute_embeddings(encoder: torch.nn.Module, images: torch.Tensor, device: torch.device, batch_size: int) -> torch.Tensor:
     """
-    Run images through encoder in batches and return a [N, D] tensor of embeddings (CPU float32).
+    Run images through encoder and return embeddings as [N, D] float32 on CPU.
     """
     encoder.eval()
     feats = []
@@ -67,8 +65,7 @@ def _compute_embeddings(encoder: torch.nn.Module, images: torch.Tensor, device: 
 
 def _pearson_rdm(X: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
     """
-    Compute 1 - Pearson correlation matrix for row-vectors in X (shape [N, D]).
-    Returns a [N, N] tensor on CPU.
+    Compute 1 - Pearson correlation for row vectors in X ([N, D]).
     """
     X = X.to(dtype=torch.float32, device="cpu")
     Xc = X - X.mean(dim=1, keepdim=True)
@@ -76,7 +73,7 @@ def _pearson_rdm(X: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
     Y = Xc / norms
     corr = Y @ Y.t()
     rdm = 1.0 - corr
-    # Ensure perfect self-similarity maps to 0 exactly
+    # Ensure exact zeros on the diagonal.
     rdm.fill_diagonal_(0.0)
     return rdm
 
@@ -92,8 +89,7 @@ def _upper_triangle_vector(M: torch.Tensor, include_diagonal: bool = True) -> to
 def main():
     args = parse_model_load_args()
 
-    # Load all encoders from the provided model folder (one per trial),
-    # selecting the checkpoint combination indicated by --prefer (defaults to 'best').
+    # Load all encoders from the provided path.
     bundles = load_model_bundles(
         path=args.path,
         prefer=args.prefer,
@@ -110,18 +106,18 @@ def main():
     if len(bundles) == 0:
         raise RuntimeError("No checkpoints found in the provided model folder.")
 
-    # Eval-only CIFAR-10 loader (deterministic order)
+    # Evaluation-only CIFAR-10 loader (deterministic order).
     val_loader = get_cifar10_eval_loader(
         root=args.dataset_root,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
     )
 
-    # Deterministically select 100 samples per class (1000 total)
+    # Deterministically select 100 samples per class (1000 total).
     samples_cpu, labels = _select_deterministic_cifar10_subset(val_loader, per_class=100)
     labels_tensor = torch.tensor(labels, dtype=torch.long)
 
-    # For each encoder, compute embeddings on the fixed 1000 samples and then the RDM
+    # Compute trial RDMs on the fixed 1000-sample subset.
     rdms = []
     metas = []
     cosine_results = []
@@ -137,7 +133,7 @@ def main():
             run_name = os.path.basename(run_folder) if run_folder else f"trial_{idx:02d}"
         except Exception:
             run_name = f"trial_{idx:02d}"
-        # Keep compact meta info for traceability
+        # Compact metadata for traceability.
         meta_info = {
             "stage": meta.get("stage"),
             "encoder_epoch": meta.get("encoder_epoch"),
@@ -162,16 +158,16 @@ def main():
             "meta": meta_info,
         })
 
-    # Save all trial RDMs in a single file under the given model folder
+    # Save all trial RDMs in one file under the model folder.
     model_folder = args.path if os.path.isdir(args.path) else os.path.dirname(args.path)
     base = os.path.basename(os.path.normpath(model_folder))
     out_name = f"RDM_{base}.pt"
     out_path = os.path.join(model_folder, out_name)
 
-    # Compute averaged RDM across trials (full matrix for plotting), then compress for saving
+    # Compute averaged RDM across trials.
     avg_rdm = torch.stack(rdms, dim=0).mean(dim=0) if len(rdms) > 0 else None
 
-    # Save per-trial figures (full RDMs for visualization)
+    # Save per-trial full-matrix RDM figures.
     for idx, (rdm, meta) in enumerate(zip(rdms, metas)):
         run_name = meta.get("run_name") or f"trial_{idx:02d}"
         fig_name = f"RDM_{base}__{run_name}.png"
@@ -225,7 +221,7 @@ def main():
         print(f"Saved cosine similarity data: {cos_pt_path}")
         print(f"Saved cosine similarity figure: {cos_fig_path}")
 
-    # Save averaged RDM figure if available
+    # Save averaged RDM figure if available.
     if avg_rdm is not None:
         avg_fig_name = f"AvgRDM_{base}.png"
         avg_fig_path = os.path.join(model_folder, avg_fig_name)
@@ -240,14 +236,13 @@ def main():
         plt.close()
         print(f"Saved Avg RDM figure: {avg_fig_path}")
 
-    # Compress RDMs to upper-triangular vectors for saving (exclude diagonal to avoid trivial zeros)
+    # Compress RDMs to upper-triangular vectors (without diagonal).
     rdms_upper = [
         _upper_triangle_vector(rdm, include_diagonal=False) for rdm in rdms
     ]
     avg_rdm_upper = _upper_triangle_vector(avg_rdm, include_diagonal=False) if avg_rdm is not None else None
 
-    # Second-level analysis: correlate RDMs across trials (unique pairs, exclude self)
-    # Use upper-triangle vectors WITHOUT the diagonal for correlation to avoid trivial zeros.
+    # Correlate upper-triangular RDM vectors across trial pairs.
     if len(rdms) >= 2:
         vecs_no_diag = [
             _upper_triangle_vector(rdm, include_diagonal=False) for rdm in rdms
@@ -290,13 +285,13 @@ def main():
     else:
         print("RDM consistency across trials — need at least 2 trials. Skipping stats save.")
 
-    # Save all trial RDMs (upper triangle only)
+    # Save all trial RDM vectors.
     payload = {
-        "rdms_upper": rdms_upper,   # list of length n; each is 1D tensor (upper triangle incl. diag)
-        "N": 1000,                  # original matrix size
+        "rdms_upper": rdms_upper,   # List of length n; each entry is a 1D tensor.
+        "N": 1000,                  # Original matrix size.
         "include_diagonal": False,
-        "labels": labels,           # list[int] length 1000
-        "metas": metas,             # minimal metadata per trial
+        "labels": labels,           # List[int] of length 1000.
+        "metas": metas,             # Minimal metadata per trial.
         "model_folder": model_folder,
         "prefer": args.prefer,
         "cosine_similarities": [
@@ -311,7 +306,7 @@ def main():
     torch.save(payload, out_path)
     print(f"Saved {len(rdms_upper)} upper-triangular RDMs to: {out_path}")
 
-    # Save averaged RDM (upper triangle only) in a separate file
+    # Save averaged RDM vector in a separate file.
     if avg_rdm_upper is not None:
         avg_name = f"AvgRDM_{base}.pt"
         avg_path = os.path.join(model_folder, avg_name)
@@ -327,7 +322,7 @@ def main():
         torch.save(avg_payload, avg_path)
         print(f"Saved averaged upper-triangular RDM to: {avg_path}")
 
-    # (Figures saved above.)
+    # Figures are saved above.
 
 
 if __name__ == "__main__":

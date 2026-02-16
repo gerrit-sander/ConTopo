@@ -16,11 +16,11 @@ def get_cifar10_eval_loader(
     subset: int | None = None,
 ):
     """
-    Build a DataLoader for CIFAR-10 *test* split (eval only).
+    Build a DataLoader for the CIFAR-10 test split.
 
-    - Normalizes with CIFAR-10 mean/std.
+    - Uses CIFAR-10 mean/std normalization.
     - `pin_memory` defaults to CUDA availability.
-    - `subset` lets you evaluate on the first N examples (quick checks).
+    - `subset` evaluates only the first N examples.
     """
     if pin_memory is None:
         pin_memory = torch.cuda.is_available()
@@ -32,11 +32,11 @@ def get_cifar10_eval_loader(
 
     ds = datasets.CIFAR10(root=root, train=False, download=True, transform=transform)
 
-    # Optional quick subset for faster eval/plots
+    # Optional subset for faster checks.
     if subset is not None and subset < len(ds):
         ds = Subset(ds, range(subset))
 
-    # Deterministic order for evaluation
+    # Deterministic order for evaluation.
     loader = DataLoader(
         ds,
         batch_size=batch_size,
@@ -49,30 +49,30 @@ def get_cifar10_eval_loader(
 
 def resolve_figure_path(src_path: str, experiment: str | None = None) -> str:
     """
-    Resolve an output path for a figure based on a checkpoint or model/run directory.
+    Resolve an output figure path from a checkpoint or run directory.
 
     Layout:
       <Arch>/figures/<experiment?>/<model_name>/<run_name>/<ckpt_basename>.png
 
     Where:
       - <Arch> is the parent directory of 'models' (e.g., 'ShallowCNN' or 'ResNet18').
-      - <model_name> is the first folder under 'models' (your hyperparam folder).
+      - <model_name> is the first folder under 'models' (hyperparameter folder).
       - <run_name> is the next folder under 'models' (e.g., 'trial_00').
       - <ckpt_basename> is the checkpoint filename without extension (e.g., 'e2e_epoch0200').
 
     Fallback when no 'models' ancestor exists:
       <run_root>/figures/<experiment?>/<model_dir>/<run_dir>/<ckpt_basename>.png
 
-    Returns the absolute path as string, creating parent directories if needed.
+    Return an absolute path string and create parent directories if needed.
     """
     p = Path(src_path).resolve()
 
-    # If a file is given (ckpt), use its parent as the run directory and its stem as the figure name.
+    # If `src_path` is a file, use its parent as run directory.
     is_file = bool(p.suffix)
     run_path = p.parent if is_file else p
     ckpt_stem = p.stem if is_file else "model"
 
-    # Find nearest ancestor named 'models'
+    # Find nearest ancestor named 'models'.
     models_dir = None
     for parent in [run_path] + list(run_path.parents):
         if parent.name == "models":
@@ -80,26 +80,26 @@ def resolve_figure_path(src_path: str, experiment: str | None = None) -> str:
             break
 
     if models_dir is not None:
-        # figures root sits next to 'models', i.e. under the architecture folder
+        # Figures root sits next to 'models' under the architecture folder.
         arch_dir = models_dir.parent  # e.g., .../ShallowCNN or .../ResNet18
         figures_root = arch_dir / "figures"
         try:
-            # Expect run_path like: <...>/models/<model_name>/<run_name>
+            # Expected run path: <...>/models/<model_name>/<run_name>.
             rel = run_path.relative_to(models_dir)
             parts = rel.parts
             model_name = parts[0] if len(parts) >= 1 else run_path.name
             run_name   = parts[1] if len(parts) >= 2 else run_path.name
         except ValueError:
-            # If relative_to fails, fall back to directory names
+            # If relative_to fails, fall back to directory names.
             model_name = run_path.parent.name
             run_name   = run_path.name
     else:
-        # No 'models' ancestor → keep figures next to the provided path
+        # Without a 'models' ancestor, keep figures next to `run_path`.
         figures_root = run_path / "figures"
         model_name = run_path.parent.name  # hyperparam folder
         run_name   = run_path.name         # run folder
 
-    # Optional experiment subfolder (sanitize to safe filename)
+    # Optional experiment subfolder.
     if experiment and experiment.strip():
         safe_exp = re.sub(r"[^\w.\-]+", "_", experiment.strip())
         out_dir = figures_root / safe_exp / model_name / run_name

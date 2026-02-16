@@ -21,7 +21,7 @@ def main():
     if not bundles:
         raise RuntimeError("No checkpoints found for the provided path.")
 
-    # Eval-only CIFAR-10 loader
+    # Evaluation-only CIFAR-10 loader.
     val_loader = get_cifar10_eval_loader(
         root=args.dataset_root,
         batch_size=args.batch_size,
@@ -30,7 +30,7 @@ def main():
 
     config = load_cifar10_metadata()
     class_names = config["CIFAR10_CLASSES"]
-    # Collect one example per CIFAR-10 class (deterministic order)
+    # Collect one example per class in deterministic order.
     exemplar_imgs, exemplar_labels = [], []
     for imgs, labs in val_loader:
         for img, lab in zip(imgs, labs):
@@ -52,7 +52,7 @@ def main():
     CIFAR10_MEAN = (0.4914, 0.4822, 0.4465)
     CIFAR10_STD  = (0.2023, 0.1994, 0.2010)
 
-    # undo dataset normalisation
+    # Undo dataset normalization for visualization.
     inv_norm = T.Normalize(
         mean=[-m / s for m, s in zip(CIFAR10_MEAN, CIFAR10_STD)],
         std=[1 / s for s in CIFAR10_STD],

@@ -7,7 +7,7 @@ from utils.load import (
 )
 from utils.experiments import get_cifar10_eval_loader
 
-# Compute Moran's I for a 2D grid using rook adjacency
+# Moran's I for a 2D grid with rook adjacency.
 def morans_I_2d(grid: torch.Tensor) -> torch.Tensor:
     x = grid.detach().to(dtype=torch.float32, device="cpu")
     N = float(x.numel())
@@ -17,7 +17,7 @@ def morans_I_2d(grid: torch.Tensor) -> torch.Tensor:
     if denom.item() == 0:
         return torch.tensor(0.0)
 
-    # Directed neighbor pairs (up, down, left, right)
+    # Directed neighbor pairs (up, down, left, right).
     num = (
         (diff[1:, :] * diff[:-1, :]).sum() +
         (diff[:-1, :] * diff[1:, :]).sum() +
@@ -25,7 +25,7 @@ def morans_I_2d(grid: torch.Tensor) -> torch.Tensor:
         (diff[:, :-1] * diff[:, 1:]).sum()
     )
 
-    # Total weight W: count of directed neighbor pairs
+    # Total weight: count of directed neighbor pairs.
     h, w = x.shape
     W = float(2 * ((h - 1) * w + h * (w - 1)))
 
@@ -34,8 +34,7 @@ def morans_I_2d(grid: torch.Tensor) -> torch.Tensor:
 def main():
     args = parse_model_load_args()
 
-    # Load all encoders from the provided model folder (one per trial),
-    # selecting the checkpoint combination indicated by --prefer (defaults to 'best').
+    # Load all encoders from the provided path.
     bundles = load_model_bundles(
         path=args.path,
         prefer=args.prefer,
@@ -45,14 +44,14 @@ def main():
         strict=True,
     )
 
-    # Eval-only CIFAR-10 loader
+    # Evaluation-only CIFAR-10 loader.
     val_loader = get_cifar10_eval_loader(
         root=args.dataset_root,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
     )
 
-    # Compute Moran's I average for each encoder, then aggregate across trials
+    # Compute trial-level Moran's I averages.
     trial_scores = []
     for bundle in bundles:
         encoder = bundle.encoder
@@ -78,7 +77,7 @@ def main():
         avg_I = total_I / n if n > 0 else float('nan')
         trial_scores.append(avg_I)
 
-    # Aggregate statistics across trials
+    # Aggregate statistics across trials.
     import math as _m
     N = len(trial_scores)
     if N == 0:
@@ -92,8 +91,7 @@ def main():
         std = 0.0
     sem = std / _m.sqrt(N) if N > 0 else float('nan')
 
-    # Print concise summary for plotting error bands
-    # Lines make it simple to parse if needed
+    # Parse-friendly summary output.
     print(f"n_trials: {N}")
     print(f"mean: {mean}")
     print(f"std: {std}")

@@ -54,7 +54,7 @@ def parse_args() -> argparse.Namespace:
     )
     args = parser.parse_args()
 
-    # Drop the explicit "--" separator if present in REMAINDER.
+    # Drop explicit "--" separator if present in REMAINDER.
     if args.experiment_args and args.experiment_args[0] == "--":
         args.experiment_args = args.experiment_args[1:]
 

@@ -9,8 +9,7 @@ from utils.train import unwrap
 
 def main():
     args = parse_model_load_args()
-    # Load all encoders from the provided model folder (one per trial),
-    # selecting the checkpoint combination indicated by --prefer (defaults to 'best').
+    # Load all encoders from the provided path.
     bundles = load_model_bundles(
         path=args.path,
         prefer=args.prefer,
@@ -19,8 +18,7 @@ def main():
         eval_mode=True,
         strict=True,
     )
-    # For each trial, compute the mean L2 norm across the rows of the final FC
-    # weight matrix (one row per embedding dimension), then aggregate across trials.
+    # Compute mean row-wise FC weight norms per trial, then aggregate.
     trial_means = []
     vectors_total = 0
     for bundle in bundles:
@@ -35,20 +33,20 @@ def main():
             raise TypeError(
                 "Expected the final 'fc' layer to be nn.Linear."
             )
-        # fc.weight shape: [out_features (embedding dim), in_features]
+        # fc.weight shape: [embedding_dim, in_features].
         W = fc.weight.detach().to(dtype=torch.float32, device="cpu")
-        # Row-wise L2 norms → one value per embedding dimension
+        # Row-wise L2 norms.
         norms = torch.linalg.norm(W, ord=2, dim=1)
         trial_means.append(float(norms.mean().item()))
         vectors_total += int(norms.numel())
-    # Aggregate across trials: mean and std of per-trial mean norms
+    # Aggregate across trials.
     if len(trial_means) == 0:
         print("nan")
         return
     N = len(trial_means)
     mean = float(np.mean(trial_means))
     std = float(np.std(trial_means, ddof=1 if N > 1 else 0))
-    # Minimal, parse-friendly output
+    # Parse-friendly output.
     print(f"n_trials: {len(bundles)}")
     print(f"vectors_total: {vectors_total}")
     print(f"mean: {mean}")

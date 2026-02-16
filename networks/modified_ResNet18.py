@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class Block(nn.Module):
-    """Basic block for ResNet18 architecture. Each block consists of two convolutional layers."""
+    """Basic residual block used in ResNet18."""
     def __init__(self, in_channels, channels, stride=1):
         super(Block, self).__init__()
 
@@ -27,7 +27,7 @@ class Block(nn.Module):
         return out
     
 class ResNet18(nn.Module):
-    """ Modified ResNet18 architecture for CIFAR-10. In the end there is a single linear layer to get embeddings of specified dimension."""
+    """ResNet18 variant for CIFAR-10 with a final embedding layer."""
     def __init__(self, in_channels=3, emb_dim=256):
         super(ResNet18, self).__init__()
 
@@ -60,7 +60,7 @@ class ResNet18(nn.Module):
         return out
     
 class ProjectionResNet18(nn.Module):
-    """ResNet18 architecture with a projection head for contrastive learning."""
+    """ResNet18 encoder with projection head for contrastive learning."""
     def __init__(self, emb_dim=256, feat_dim=128, use_dropout=True, p_dropout=0.2, ret_emb=False):
         super(ProjectionResNet18, self).__init__()
         self.ret_emb = ret_emb
@@ -79,7 +79,7 @@ class ProjectionResNet18(nn.Module):
         return (embeddings, features) if self.ret_emb else features
 
 class LinearResNet18(nn.Module):
-    """ResNet18 architecture with a linear layer at the end for classification tasks."""
+    """ResNet18 encoder with linear classifier for classification tasks."""
     def __init__(self, emb_dim=256, num_classes=10, p_dropout=0.2, use_dropout=True, ret_emb=False):
         super(LinearResNet18, self).__init__()
         self.ret_emb = ret_emb

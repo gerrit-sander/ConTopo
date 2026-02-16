@@ -6,8 +6,7 @@ from torchvision import datasets
 
 class TwoCropTransform:
     """
-    A transform that applies the same transformation to two different crops of the input.
-    This is useful for contrastive learning tasks.
+    Apply the same transform twice and return both views.
     """
     def __init__(self, transform):
         self.transform = transform
@@ -17,20 +16,14 @@ class TwoCropTransform:
 
 def load_cifar10_metadata(config_path="configs/cifar10.yaml"):
     """
-    Load CIFAR-10 metadata (classes, animacy labels, mappings) from a YAML file.
-    
-    Args:
-        config_path (str): Path to the YAML configuration file.
-    
-    Returns:
-        dict: Dictionary with keys 'CIFAR10_CLASSES', 'ANIMACY', and 'ANIMACY_MAPPING'.
+    Load CIFAR-10 class and animacy metadata from YAML.
     """
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
     return config
 
 class AverageMeter(object):
-    """Computes and stores the average and current value"""
+    """Track current value, running sum, and average."""
     def __init__(self):
         self.reset()
 
@@ -63,7 +56,7 @@ def accuracy(output, target, topk=(1,)):
         maxk = max(topk)
         batch_size = target.size(0)
 
-        # output: [B, C] logits
+        # Output shape: [B, C] logits.
         _, pred = output.topk(maxk, dim=1, largest=True, sorted=True)  # [B, maxk]
         pred = pred.t()                                                # [maxk, B]
         correct = pred.eq(target.view(1, -1).expand_as(pred))          # [maxk, B]
@@ -78,11 +71,11 @@ class tb_logger:
         class Logger:
             def __init__(self, logdir, flush_secs=2):
                 os.makedirs(logdir, exist_ok=True)
-                # SummaryWriter flushes on close; set flush_secs if supported
+                # Set flush_secs when supported.
                 try:
                     self.writer = SummaryWriter(log_dir=logdir, flush_secs=flush_secs)
                 except TypeError:
-                    # Older PyTorch versions may not support flush_secs
+                    # Older PyTorch versions may not support flush_secs.
                     self.writer = SummaryWriter(log_dir=logdir)
 
             def log_value(self, tag, value, step):
@@ -92,7 +85,7 @@ class tb_logger:
                 self.writer.close()
 
 def grad_norm(loss, params):
-    # L2 norm of grads of `loss` wrt `params` (no weight update)
+    # L2 norm of gradients of `loss` with respect to `params`.
     grads = torch.autograd.grad(loss, params, retain_graph=True, allow_unused=True)
     flat = [g.detach().reshape(-1) for g in grads if g is not None]
     if len(flat) == 0:
@@ -102,11 +95,7 @@ def grad_norm(loss, params):
 
 def split_cifar10_train_val_indices(root, val_per_class=500):
     """
-    Build a deterministic 45k/5k split from the CIFAR-10 train split.
-    Picks the first `val_per_class` samples per class (by original order) for validation.
-
-    Returns:
-        (train_indices, val_indices): two sorted lists of indices into the CIFAR-10 train set.
+    Build a deterministic 45k/5k split from the CIFAR-10 train set.
     """
     base = datasets.CIFAR10(root=root, train=True, transform=None, download=True)
     targets = base.targets if hasattr(base, 'targets') else base.train_labels

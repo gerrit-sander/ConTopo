@@ -33,13 +33,13 @@ def compute_trial_distances(embeddings: torch.Tensor) -> dict[float, float]:
         return {thr: float("nan") for thr in THRESHOLDS}
 
     device = embeddings.device
-    # Center activations and normalise to compute Pearson correlation.
+    # Center activations and normalize for Pearson correlation.
     centered = embeddings - embeddings.mean(dim=0, keepdim=True)
     std = centered.std(dim=0, unbiased=True)
     # Avoid division by zero for inactive units.
     std = std.masked_fill(std == 0, float("nan"))
     normed = centered / std
-    # Replace NaNs from zero-variance units with zeros so they do not contribute.
+    # Replace NaNs from zero-variance units with zeros.
     normed = torch.nan_to_num(normed, nan=0.0)
 
     denom = float(num_samples - 1) if num_samples > 1 else 1.0

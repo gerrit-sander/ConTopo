@@ -76,10 +76,10 @@ def main():
     models_root = os.path.abspath(args.models_root)
     all_folders = _find_model_folders(models_root)
 
-    # Only take models that contain '0.5dropout' (exclude 0.0 ones)
+    # Keep only models with '0.5dropout' in the folder name.
     cand = [p for p in all_folders if "0.5dropout" in os.path.basename(p)]
 
-    # Sort by loss tag (prefix before first '_'), then numeric rho ascending, then name
+    # Sort by loss tag, rho value, then model name.
     def _sort_key(path: str) -> Tuple[str, float, str]:
         name = os.path.basename(path.rstrip(os.sep))
         loss = name.split("_", 1)[0]
@@ -91,12 +91,12 @@ def main():
     if not model_folders:
         raise SystemExit(f"No matching model folders (containing '0.5dropout') under: {models_root}")
 
-    # Aggregate rows and build index in the exact same order
+    # Aggregate rows and build the matching index.
     rows: List[torch.Tensor] = []
     index_rows: List[Dict[str, Any]] = []
     vec_len: int | None = None
 
-    kept_models_meta: List[Dict[str, Any]] = []  # aligned with appended rows/models
+    kept_models_meta: List[Dict[str, Any]] = []  # Aligned with aggregated model rows.
     consistency_rows: List[Dict[str, Any]] = []
     for folder in model_folders:
         name = os.path.basename(folder.rstrip(os.sep))
@@ -111,7 +111,7 @@ def main():
 
         start = sum(t.shape[0] for t in rows)
         rows.append(T)
-        # Capture meta for this model (once per model)
+        # Capture per-model metadata once.
         loss = name.split("_", 1)[0]
         m_rho = re.search(r"_(\d+(?:\.\d+)?)rho(?:_|$)", name)
         rho_val = float(m_rho.group(1)) if m_rho else float("inf")
@@ -138,14 +138,14 @@ def main():
     X = torch.cat(rows, dim=0).to(dtype=torch.float32, device="cpu")  # [g, m]
     g, m = X.shape
 
-    # Pearson correlation across rows
+    # Pearson correlation across rows.
     Xc = X - X.mean(dim=1, keepdim=True)
     eps = 1e-8
     norms = Xc.norm(dim=1, keepdim=True).clamp_min(eps)
     Y = Xc / norms
     rsa = (Y @ Y.t()).clamp(-1.0, 1.0)  # [g, g]
 
-    # Save artifacts
+    # Save artifacts.
     rsa_pt = os.path.join(models_root, f"{args.output_prefix}_{g}x{g}.pt")
     torch.save({"rsa_matrix": rsa, "index": index_rows}, rsa_pt)
 
@@ -175,14 +175,14 @@ def main():
     plt.savefig(png_path, dpi=200, bbox_inches="tight")
     plt.close()
 
-    # Optionally collapse across trials by simple block-averaging (e.g., 5x5 blocks)
+    # Optionally collapse across trials by block averaging.
     t = int(args.trials_per_model)
     if t > 0 and g % t == 0:
         n_models = g // t
-        # reshape to [models, trials, models, trials] and mean over trial dims
+        # Reshape to [models, trials, models, trials] and average over trial dimensions.
         rsa_collapsed = rsa.reshape(n_models, t, n_models, t).mean(dim=(1, 3))
 
-        # Save collapsed matrix
+        # Save collapsed matrix.
         rsa_c_pt = os.path.join(models_root, f"{args.output_prefix}_collapsed_{n_models}x{n_models}.pt")
         torch.save({
             "rsa_matrix_collapsed": rsa_collapsed,
@@ -191,7 +191,7 @@ def main():
             "collapsed_shape": (n_models, n_models),
         }, rsa_c_pt)
 
-        # Plot collapsed heatmap
+        # Plot collapsed heatmap.
         png_c_path = os.path.join(models_root, f"{args.output_prefix}_collapsed_{n_models}x{n_models}.png")
         plt.figure(figsize=(7, 6))
         im = plt.imshow(rsa_collapsed.numpy(), cmap="viridis", vmin=-1.0, vmax=1.0, interpolation="nearest")
@@ -204,20 +204,19 @@ def main():
         plt.savefig(png_c_path, dpi=200, bbox_inches="tight")
         plt.close()
 
-        # Further collapses: by rho (6x6) and by task loss (4x4)
-        # Build grouping indices aligned with model order used above
+        # Additional collapses by rho and by task loss.
         if len(kept_models_meta) != n_models:
-            # Safety guard; if mismatch, skip further collapsing
+            # Safety guard: skip if metadata/model count mismatch.
             pass
         else:
-            # Group indices by loss and by rho
+            # Group model indices by loss and rho.
             loss_to_indices: Dict[str, List[int]] = {}
             rho_to_indices: Dict[float, List[int]] = {}
             for idx, meta in enumerate(kept_models_meta):
                 loss_to_indices.setdefault(meta["loss"], []).append(idx)
                 rho_to_indices.setdefault(meta["rho"], []).append(idx)
 
-            # Preserve appearance order for losses; rhos will follow first-appearance order (typically ascending)
+            # Preserve first-appearance ordering for labels.
             loss_labels: List[str] = []
             seen_losses = set()
             for meta in kept_models_meta:
@@ -232,7 +231,7 @@ def main():
                     rho_values.append(meta["rho"])
                     seen_rhos.add(meta["rho"])
 
-            # Collapse by rho (group by rho only) -> R x R
+            # Collapse by rho only -> R x R.
             R = len(rho_values)
             if R >= 2:
                 rsa_by_rho = torch.empty((R, R), dtype=rsa_collapsed.dtype)
@@ -244,7 +243,7 @@ def main():
                         block = rows_i[:, idx_j]
                         rsa_by_rho[i, j] = block.mean()
 
-                # Save and plot
+                # Save and plot.
                 rsa_rho_pt = os.path.join(models_root, f"{args.output_prefix}_collapsed_by_rho_{R}x{R}.pt")
                 torch.save({
                     "rsa_matrix_by_rho": rsa_by_rho,
@@ -264,7 +263,7 @@ def main():
                 plt.savefig(png_rho_path, dpi=200, bbox_inches="tight")
                 plt.close()
 
-            # Collapse by task loss (group by loss only) -> L x L
+            # Collapse by task loss only -> L x L.
             L = len(loss_labels)
             if L >= 2:
                 rsa_by_loss = torch.empty((L, L), dtype=rsa_collapsed.dtype)
@@ -276,7 +275,7 @@ def main():
                         block = rows_i[:, idx_j]
                         rsa_by_loss[i, j] = block.mean()
 
-                # Save and plot
+                # Save and plot.
                 rsa_loss_pt = os.path.join(models_root, f"{args.output_prefix}_collapsed_by_loss_{L}x{L}.pt")
                 torch.save({
                     "rsa_matrix_by_loss": rsa_by_loss,
@@ -296,7 +295,7 @@ def main():
                 plt.savefig(png_loss_path, dpi=200, bbox_inches="tight")
                 plt.close()
     else:
-        # If not divisible, skip quietly per the "keep it simple" request
+        # If dimensions are not divisible, skip collapsing.
         pass
 
 

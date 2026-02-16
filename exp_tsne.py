@@ -20,7 +20,7 @@ def main():
     if not bundles:
         raise RuntimeError("No checkpoints found for the provided path.")
 
-    # Eval-only CIFAR-10 loader
+    # Evaluation-only CIFAR-10 loader.
     val_loader = get_cifar10_eval_loader(
         root=args.dataset_root,
         batch_size=args.batch_size,

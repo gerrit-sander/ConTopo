@@ -4,10 +4,7 @@ import torch.nn.functional as F
 
 class ShallowCNN(nn.Module):
     """
-    A simple CNN bachbone architecture.
-    This architecture consists of several convolutional layers followed by batch normalization,
-    ReLU activation, and max pooling.
-    The final output is a feature vector of specified embedding dimension used for the topographic loss.
+    Simple CNN backbone with four convolutional blocks and a final embedding layer.
     """
     def __init__(self, in_channels=3, emb_dim=256):
         super().__init__()
@@ -29,7 +26,7 @@ class ShallowCNN(nn.Module):
         return out
     
 class ProjectionShallowCNN(nn.Module):
-    """Projection head for the ShallowCNN architecture."""
+    """ShallowCNN encoder with projection head for contrastive learning."""
     def __init__(self, emb_dim=256, feat_dim=128, p_dropout=0.2, use_dropout=True, ret_emb=False):
         super(ProjectionShallowCNN, self).__init__()
         self.ret_emb = ret_emb
@@ -47,7 +44,7 @@ class ProjectionShallowCNN(nn.Module):
         return (embeddings, features) if self.ret_emb else features
     
 class LinearShallowCNN(nn.Module):
-    """ ShallowCNN architecture with a linear layer at the end for classification tasks."""
+    """ShallowCNN encoder with linear classifier for classification tasks."""
     def __init__(self, emb_dim=256, num_classes=10, p_dropout=0.2, use_dropout=True, ret_emb=False):
         super(LinearShallowCNN, self).__init__()
         self.ret_emb = ret_emb
